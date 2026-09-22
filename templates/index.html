@@ -98,6 +98,9 @@
                 <button class="tab-btn" onclick="switchTab('tab-connection')" id="btn-tab-connection">
                     <i class="fa-solid fa-plug"></i> Connect
                 </button>
+                <button class="tab-btn" onclick="switchTab('tab-config-lifecycle')" id="btn-tab-config-lifecycle">
+                    <i class="fa-solid fa-file-export"></i> Config
+                </button>
             </nav>
 
             <div class="tab-content-container">
@@ -111,15 +114,14 @@
                     <form id="interface-form" onsubmit="submitInterfaceConfig(event)">
                         <div class="form-group">
                             <label>Interface</label>
-                            <select id="if-select" class="form-control" onchange="updateIfPreview()">
-                                <option value="GigabitEthernet0/0/0">GigabitEthernet0/0/0</option>
-                                <option value="GigabitEthernet0/0/1">GigabitEthernet0/0/1</option>
-                                <option value="GigabitEthernet0/0/2">GigabitEthernet0/0/2</option>
-                                <option value="Serial0/1/0">Serial0/1/0</option>
-                                <option value="Loopback0">Loopback0</option>
-                                <option value="FastEthernet0/1">FastEthernet0/1</option>
-                                <option value="Vlan1">Vlan1</option>
-                            </select>
+                            <div class="form-row" style="gap:6px">
+                                <select id="if-select" class="form-control" onchange="updateIfPreview()" style="flex:1">
+                                    <option value="GigabitEthernet0/0/0">GigabitEthernet0/0/0</option>
+                                </select>
+                                <button type="button" class="btn btn-outline btn-sm" onclick="openAddInterfaceModal()" title="Add Interface (Loopback/Serial/Vlan)">
+                                    <i class="fa-solid fa-plus"></i> Add
+                                </button>
+                            </div>
                         </div>
                         <div class="form-row">
                             <div class="form-group col">
@@ -423,13 +425,67 @@
                     </div>
                 </div>
 
+                <!-- ===== TAB 6: Config File Lifecycle (spec v3 section 19) ===== -->
+                <div id="tab-config-lifecycle" class="tab-page">
+                    <div class="section-title">
+                        <h4><i class="fa-solid fa-file-export"></i> Configuration File Management</h4>
+                        <p>Export, Merge, และ Save Configuration ของอุปกรณ์</p>
+                    </div>
+
+                    <div class="config-lifecycle-actions">
+                        <div class="lifecycle-card">
+                            <h5><i class="fa-solid fa-download"></i> Export Running Config</h5>
+                            <p>ดาวน์โหลด running-config ของอุปกรณ์เป็นไฟล์ .txt</p>
+                            <button class="btn btn-primary" onclick="exportConfig('running')">
+                                <i class="fa-solid fa-download"></i> Export Running
+                            </button>
+                        </div>
+
+                        <div class="lifecycle-card">
+                            <h5><i class="fa-solid fa-download"></i> Export Startup Config</h5>
+                            <p>ดาวน์โหลด startup-config ของอุปกรณ์เป็นไฟล์ .txt</p>
+                            <button class="btn btn-primary" onclick="exportConfig('startup')">
+                                <i class="fa-solid fa-download"></i> Export Startup
+                            </button>
+                        </div>
+
+                        <div class="lifecycle-card">
+                            <h5><i class="fa-solid fa-floppy-disk"></i> Save Running → Startup</h5>
+                            <p>บันทึก running-config เป็น startup-config (write memory)</p>
+                            <button class="btn btn-primary" onclick="saveConfig()">
+                                <i class="fa-solid fa-floppy-disk"></i> Write Memory
+                            </button>
+                        </div>
+
+                        <div class="lifecycle-card" style="grid-column: 1/-1">
+                            <h5><i class="fa-solid fa-file-import"></i> Merge Config</h5>
+                            <p>นำเข้า configuration text แล้วส่งไปยังอุปกรณ์ (lines ที่ขึ้นต้นด้วย ! จะถูกข้ามไป)</p>
+                            <textarea id="merge-config-text" class="form-control" rows="6" placeholder="วาง Cisco IOS configuration commands ที่นี่...
+interface GigabitEthernet0/0
+ ip address 10.0.0.1 255.255.255.0
+ no shutdown
+!
+router ospf 1
+ network 10.0.0.0 0.0.0.255 area 0"></textarea>
+                            <button class="btn btn-primary" onclick="mergeConfig()" style="margin-top:8px">
+                                <i class="fa-solid fa-file-import"></i> Merge to Device
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="cli-preview-box" style="margin-top:12px">
+                        <div class="cli-preview-title"><i class="fa-solid fa-terminal"></i> Config Output</div>
+                        <pre id="config-lifecycle-output">กด Export/Merge/Save เพื่อดูผลลัพธ์</pre>
+                    </div>
+                </div>
+
             </div><!-- end tab-content-container -->
         </section>
 
     </main>
 </div>
 
-<!-- ===== MODAL: Add Device to Inventory ===== -->
+<!-- ===== MODAL: Add Device to Inventory (spec v3: Design Phase — ไม่ต้อง IP/credential) ===== -->
 <div id="add-device-modal" class="modal-backdrop">
     <div class="modal-card" style="max-width:520px">
         <div class="modal-header">
@@ -438,58 +494,100 @@
         </div>
         <div class="modal-body">
             <form id="add-device-form" onsubmit="submitAddDevice(event)">
-                <div class="form-row">
-                    <div class="form-group col">
-                        <label>Device Name</label>
-                        <input type="text" id="ad-name" class="form-control" placeholder="Router-R3" required>
-                    </div>
-                    <div class="form-group col">
-                        <label>Model</label>
-                        <input type="text" id="ad-model" class="form-control" placeholder="Cisco 4331">
-                    </div>
+                <div class="form-group">
+                    <label>Device Name <span class="required">*</span></label>
+                    <input type="text" id="ad-name" class="form-control" placeholder="Router-R3" required>
                 </div>
                 <div class="form-row">
                     <div class="form-group col">
-                        <label>Device Type</label>
-                        <select id="ad-type" class="form-control">
+                        <label>Device Type <span class="required">*</span></label>
+                        <select id="ad-type" class="form-control" onchange="onDeviceTypeChange()">
                             <option value="router">Router</option>
                             <option value="switch">Switch</option>
-                            <option value="firewall">Firewall</option>
                         </select>
                     </div>
                     <div class="form-group col">
-                        <label>Connection Protocol</label>
-                        <select id="ad-proto" class="form-control">
-                            <option value="SSH">SSH</option>
-                            <option value="TELNET">Telnet</option>
-                            <option value="SERIAL">Serial</option>
+                        <label>Model <span class="required">*</span></label>
+                        <select id="ad-model" class="form-control">
+                            <option value="Cisco 4331">Cisco 4331</option>
+                            <option value="Cisco 2901">Cisco 2901</option>
+                            <option value="Cisco 1941">Cisco 1941</option>
+                            <option value="Cisco 2911">Cisco 2911</option>
                         </select>
                     </div>
                 </div>
-                <div class="form-row">
-                    <div class="form-group col-8">
-                        <label>IP Address</label>
-                        <input type="text" id="ad-ip" class="form-control" placeholder="192.168.1.120">
-                    </div>
-                    <div class="form-group col-4">
-                        <label>Port</label>
-                        <input type="number" id="ad-port" class="form-control" value="22">
-                    </div>
+                <div class="interfaces-preview" id="ad-interfaces-preview">
+                    <small class="form-hint"><i class="fa-solid fa-info-circle"></i> Interfaces จะถูกสร้างอัตโนมัติตาม Model ที่เลือก</small>
                 </div>
-                <div class="form-row">
-                    <div class="form-group col">
-                        <label>Username</label>
-                        <input type="text" id="ad-user" class="form-control" value="cisco">
+
+                <hr style="border-color:var(--border);margin:12px 0">
+                <details class="connection-details">
+                    <summary style="cursor:pointer;color:var(--text-dim);font-size:12px">
+                        <i class="fa-solid fa-plug"></i> Connection Profile (optional — กรอกทีหลังได้)
+                    </summary>
+                    <div style="margin-top:8px">
+                        <div class="form-row">
+                            <div class="form-group col">
+                                <label>Connection Protocol</label>
+                                <select id="ad-proto" class="form-control">
+                                    <option value="SSH">SSH</option>
+                                    <option value="TELNET">Telnet</option>
+                                    <option value="SERIAL">Serial</option>
+                                </select>
+                            </div>
+                            <div class="form-group col">
+                                <label>Port</label>
+                                <input type="number" id="ad-port" class="form-control" value="22">
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label>IP Address</label>
+                            <input type="text" id="ad-ip" class="form-control" placeholder="192.168.1.120">
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group col">
+                                <label>Username</label>
+                                <input type="text" id="ad-user" class="form-control" placeholder="cisco">
+                            </div>
+                            <div class="form-group col">
+                                <label>Password</label>
+                                <input type="password" id="ad-pass" class="form-control" placeholder="cisco">
+                            </div>
+                        </div>
                     </div>
-                    <div class="form-group col">
-                        <label>Password</label>
-                        <input type="password" id="ad-pass" class="form-control" value="cisco">
-                    </div>
-                </div>
+                </details>
+
                 <button type="submit" class="btn btn-primary btn-block mt-1">
-                    <i class="fa-solid fa-floppy-disk"></i> Save Device
+                    <i class="fa-solid fa-floppy-disk"></i> Create Device
                 </button>
             </form>
+        </div>
+    </div>
+</div>
+
+<!-- ===== MODAL: Add Interface (spec v3 section 3.2) ===== -->
+<div id="add-interface-modal" class="modal-backdrop">
+    <div class="modal-card" style="max-width:400px">
+        <div class="modal-header">
+            <div class="modal-title"><i class="fa-solid fa-plus"></i> Add Interface</div>
+            <button class="modal-close-btn" onclick="closeModal('add-interface-modal')">&times;</button>
+        </div>
+        <div class="modal-body">
+            <div class="form-group">
+                <label>Interface Type</label>
+                <select id="add-if-type" class="form-control">
+                    <option value="loopback">Loopback</option>
+                    <option value="serial">Serial (WIC-2T)</option>
+                    <option value="vlan">VLAN</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label>Number</label>
+                <input type="number" id="add-if-number" class="form-control" value="0" min="0">
+            </div>
+            <button class="btn btn-primary btn-block" onclick="submitAddInterface()">
+                <i class="fa-solid fa-plus"></i> Add Interface
+            </button>
         </div>
     </div>
 </div>

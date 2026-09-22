@@ -1,9 +1,10 @@
 """
 app.py — NetConfig Tracer Studio Web Server
 Flask backend ที่ใช้ ConnectionManager, command_builder, command_normalizer, topology_builder
+Spec v3: เพิ่ม hardware_profiles, validators, config lifecycle, interface CRUD
 """
 
-from flask import Flask, render_template, request, jsonify
+from flask import Flask, render_template, request, jsonify, Response
 
 from connection_manager import (
     ConnectionManager, ip_is_valid, ping_check,
@@ -18,6 +19,15 @@ from command_builder import (
 from command_normalizer import normalize, get_suggestions
 from topology_builder import (
     build_topology_graph, graph_to_json, DEMO_GRAPH_JSON, NX_AVAILABLE
+)
+from hardware_profiles import (
+    get_model_list, generate_interfaces, create_additional_interface,
+    HARDWARE_PROFILES
+)
+from validators import (
+    validate_ip, validate_subnet_mask, validate_wildcard_mask,
+    validate_router_id, validate_as_number, validate_port,
+    validate_interface_config
 )
 
 app = Flask(__name__)
@@ -655,6 +665,185 @@ def _short_if_name(name: str) -> str:
         if name.startswith(long):
             return short + name[len(long):]
     return name
+
+
+# ===========================================================================
+# Routes — Hardware Profiles (spec v3 section 3)
+# ===========================================================================
+@app.route("/api/models", methods=["GET"])
+def get_models():
+    """คืนรายชื่อ Model ทั้งหมด (กรองตาม device_type ได้)"""
+    device_type = request.args.get("type", None)
+    models = get_model_list(device_type)
+    return jsonify({"success": True, "models": models})
+
+
+@app.route("/api/models/<model_name>/interfaces", methods=["GET"])
+def get_model_interfaces(model_name):
+    """คืน default interfaces ตาม Hardware Profile ของ Model"""
+    interfaces = generate_interfaces(model_name)
+    return jsonify({"success": True, "model": model_name, "interfaces": interfaces})
+
+
+# ===========================================================================
+# Routes — Interface CRUD (spec v3 section 3.2)
+# ===========================================================================
+@app.route("/api/devices/<device_id>/interfaces", methods=["GET"])
+def get_device_interfaces(device_id):
+    """คืน interfaces ทั้งหมดของ device"""
+    dev = get_device_by_id(device_id)
+    if not dev:
+        # ลอง demo devices
+        demo_dev = DEMO_DEVICES.get(device_id)
+        if not demo_dev:
+            return jsonify({"success": False, "message": f"Device '{device_id}' ไม่พบ"}), 404
+        ifaces = []
+        for if_name, if_info in demo_dev.get("interfaces", {}).items():
+            ifaces.append({
+                "name": if_name,
+                "ip": if_info.get("ip", "unassigned"),
+                "mask": if_info.get("mask", ""),
+                "status": if_info.get("status", "down"),
+                "description": if_info.get("description"),
+            })
+        return jsonify({"success": True, "device_id": device_id, "interfaces": ifaces})
+
+    return jsonify({
+        "success": True,
+        "device_id": device_id,
+        "interfaces": dev.get("interfaces", []),
+    })
+
+
+@app.route("/api/devices/<device_id>/interfaces", methods=["POST"])
+def add_device_interface(device_id):
+    """เพิ่ม interface ใหม่ (Loopback, Serial, Vlan)"""
+    data = request.json or {}
+    iface_type = data.get("type", "loopback")  # loopback, serial, vlan
+    number = data.get("number", 0)
+
+    new_iface = create_additional_interface(iface_type, number)
+    if not new_iface:
+        return jsonify({"success": False, "message": f"ไม่รองรับ interface type: {iface_type}"}), 400
+
+    # อัพเดทใน demo devices ถ้ามี
+    if device_id in DEMO_DEVICES:
+        DEMO_DEVICES[device_id]["interfaces"][new_iface["name"]] = {
+            "ip": "unassigned", "mask": "", "status": "down"
+        }
+
+    # อัพเดทใน inventory
+    dev = get_device_by_id(device_id)
+    if dev:
+        if "interfaces" not in dev:
+            dev["interfaces"] = []
+        dev["interfaces"].append(new_iface)
+        devices = load_inventory()
+        for i, d in enumerate(devices):
+            if d.get("id") == device_id:
+                devices[i] = dev
+                break
+        save_inventory(devices)
+
+    return jsonify({"success": True, "interface": new_iface})
+
+
+# ===========================================================================
+# Routes — Validation (spec v3 section 12, 30)
+# ===========================================================================
+@app.route("/api/validate", methods=["POST"])
+def validate_input():
+    """Validate input ก่อนส่งไปยัง device"""
+    data = request.json or {}
+    ip = data.get("ip")
+    mask = data.get("mask")
+    wildcard = data.get("wildcard")
+    router_id = data.get("router_id")
+    as_num = data.get("as_num")
+
+    valid, errors = validate_interface_config(
+        ip=ip, mask=mask, wildcard=wildcard,
+        router_id=router_id, as_num=as_num
+    )
+    return jsonify({"success": valid, "errors": errors})
+
+
+# ===========================================================================
+# Routes — Config File Lifecycle (spec v3 section 19)
+# ===========================================================================
+@app.route("/api/config/<device_id>/running", methods=["GET"])
+def export_running(device_id):
+    """Export Running Config (spec 19.1)"""
+    if conn_mgr.is_connected(device_id):
+        result = conn_mgr.export_running_config(device_id)
+        output = result.get("output", "")
+    else:
+        output = _demo_show(device_id, "show running-config")
+
+    # ถ้า query param ?download=true → ส่งเป็นไฟล์
+    if request.args.get("download") == "true":
+        return Response(
+            output,
+            mimetype="text/plain",
+            headers={"Content-Disposition": f"attachment;filename={device_id}-running-config.txt"}
+        )
+    return jsonify({"success": True, "device_id": device_id, "config": output})
+
+
+@app.route("/api/config/<device_id>/startup", methods=["GET"])
+def export_startup(device_id):
+    """Export Startup Config (spec 19.3)"""
+    if conn_mgr.is_connected(device_id):
+        result = conn_mgr.export_startup_config(device_id)
+        output = result.get("output", "")
+    else:
+        output = _demo_show(device_id, "show startup-config")
+
+    if request.args.get("download") == "true":
+        return Response(
+            output,
+            mimetype="text/plain",
+            headers={"Content-Disposition": f"attachment;filename={device_id}-startup-config.txt"}
+        )
+    return jsonify({"success": True, "device_id": device_id, "config": output})
+
+
+@app.route("/api/config/<device_id>/merge", methods=["POST"])
+def merge_config(device_id):
+    """Merge Running Config จาก text/file (spec 19.2)"""
+    data = request.json or {}
+    config_text = data.get("config", "")
+    if not config_text.strip():
+        return jsonify({"success": False, "message": "ต้องมี config text"}), 400
+
+    if conn_mgr.is_connected(device_id):
+        result = conn_mgr.merge_config(device_id, config_text)
+    else:
+        # Simulate
+        dev = DEMO_DEVICES.get(device_id, {})
+        dev_name = dev.get("name", device_id)
+        lines = [l.strip() for l in config_text.splitlines() if l.strip() and not l.strip().startswith("!")]
+        output = f"{dev_name}#configure terminal\n"
+        output += "\n".join(f"{dev_name}(config)# {l}" for l in lines)
+        output += f"\n{dev_name}#end"
+        result = {"success": True, "output": output}
+
+    return jsonify(result)
+
+
+@app.route("/api/config/<device_id>/save", methods=["POST"])
+def save_config(device_id):
+    """Save Running → Startup (write memory) (spec 19.4)"""
+    if conn_mgr.is_connected(device_id):
+        result = conn_mgr.save_config(device_id)
+    else:
+        dev = DEMO_DEVICES.get(device_id, {})
+        dev_name = dev.get("name", device_id)
+        result = {
+            "success": True,
+            "output": f"{dev_name}#write memory\nBuilding configuration...\n[OK]"
+        }
+    return jsonify(result)
 
 
 # ===========================================================================
