@@ -1554,3 +1554,134 @@ async function pingFromDrawerPc() {
         if (outputEl) outputEl.textContent = "Error: " + e.message;
     }
 }
+
+
+// =============================================================================
+// DEVICE TYPE → MODEL DROPDOWN (spec v3 section 3)
+// =============================================================================
+function onDeviceTypeChange() {
+    const type = document.getElementById("ad-type").value;
+    const modelSel = document.getElementById("ad-model");
+    modelSel.innerHTML = "";
+
+    const models = {
+        router: [
+            { value: "Cisco 4331", label: "Cisco 4331" },
+            { value: "Cisco 2901", label: "Cisco 2901" },
+            { value: "Cisco 1941", label: "Cisco 1941" },
+            { value: "Cisco 2911", label: "Cisco 2911" },
+        ],
+        switch: [
+            { value: "Cisco Catalyst 2960", label: "Cisco Catalyst 2960" },
+            { value: "Cisco Catalyst 3560", label: "Cisco Catalyst 3560" },
+            { value: "Cisco Catalyst 3750", label: "Cisco Catalyst 3750" },
+        ],
+    };
+
+    const list = models[type] || models.router;
+    list.forEach(m => {
+        const opt = document.createElement("option");
+        opt.value = m.value;
+        opt.textContent = m.label;
+        modelSel.appendChild(opt);
+    });
+}
+
+
+// =============================================================================
+// ADD INTERFACE MODAL (spec v3 section 3.2)
+// =============================================================================
+function openAddInterfaceModal() {
+    document.getElementById("add-interface-modal").classList.add("active");
+}
+
+async function submitAddInterface() {
+    const ifType = document.getElementById("add-if-type").value;
+    const ifNum = parseInt(document.getElementById("add-if-number").value) || 0;
+
+    try {
+        const res = await fetch(`/api/devices/${activeDeviceId}/interfaces`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ type: ifType, number: ifNum })
+        });
+        const data = await res.json();
+        if (data.success) {
+            showNotification(`Added ${data.interface.name} to ${activeDeviceId}`, "success");
+            closeModal("add-interface-modal");
+            updateInterfaceOptions();
+        } else {
+            showNotification(data.message, "error");
+        }
+    } catch (e) {
+        showNotification("Failed to add interface", "error");
+    }
+}
+
+
+// =============================================================================
+// CONFIG FILE LIFECYCLE (spec v3 section 19)
+// =============================================================================
+async function exportConfig(type) {
+    // type = "running" or "startup"
+    const outputEl = document.getElementById("config-lifecycle-output");
+    outputEl.textContent = `Exporting ${type} config from ${activeDeviceId}...`;
+
+    try {
+        const res = await fetch(`/api/config/${activeDeviceId}/${type}`);
+        const data = await res.json();
+        if (data.success) {
+            outputEl.textContent = data.config;
+            // Also trigger file download
+            const blob = new Blob([data.config], { type: "text/plain" });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = `${activeDeviceId}-${type}-config.txt`;
+            a.click();
+            URL.revokeObjectURL(url);
+            showNotification(`Exported ${type} config for ${activeDeviceId}`, "success");
+        }
+    } catch (e) {
+        outputEl.textContent = `Error: ${e.message}`;
+        showNotification("Export failed", "error");
+    }
+}
+
+async function mergeConfig() {
+    const configText = document.getElementById("merge-config-text").value;
+    const outputEl = document.getElementById("config-lifecycle-output");
+    if (!configText.trim()) {
+        showNotification("กรุณาใส่ config text ก่อน", "error");
+        return;
+    }
+    outputEl.textContent = `Merging config to ${activeDeviceId}...`;
+    try {
+        const res = await fetch(`/api/config/${activeDeviceId}/merge`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ config: configText })
+        });
+        const data = await res.json();
+        outputEl.textContent = data.output || data.message || "Done";
+        showNotification(data.success ? "Config merged successfully" : (data.message || "Merge failed"),
+                         data.success ? "success" : "error");
+    } catch (e) {
+        outputEl.textContent = `Error: ${e.message}`;
+    }
+}
+
+async function saveConfig() {
+    const outputEl = document.getElementById("config-lifecycle-output");
+    outputEl.textContent = `Saving running → startup on ${activeDeviceId}...`;
+    try {
+        const res = await fetch(`/api/config/${activeDeviceId}/save`, { method: "POST" });
+        const data = await res.json();
+        outputEl.textContent = data.output || data.message || "Done";
+        showNotification(data.success ? "Config saved (write memory)" : "Save failed",
+                         data.success ? "success" : "error");
+    } catch (e) {
+        outputEl.textContent = `Error: ${e.message}`;
+    }
+}
+

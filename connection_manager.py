@@ -460,6 +460,39 @@ class ConnectionManager:
         except Exception as e:
             return {"success": False, "output": str(e)}
 
+    # ─── Config File Lifecycle (spec v3 section 19) ────────────────────
+    def export_running_config(self, device_id: str) -> dict:
+        """Export running-config ของ device (spec 19.1)"""
+        return self.send_command(device_id, "show running-config")
+
+    def export_startup_config(self, device_id: str) -> dict:
+        """Export startup-config ของ device (spec 19.3)"""
+        return self.send_command(device_id, "show startup-config")
+
+    def merge_config(self, device_id: str, config_text: str) -> dict:
+        """
+        Merge config จาก text ไปยัง device (spec 19.2)
+        อ่าน lines, ลบ comment (!), แล้วส่งผ่าน send_config_set
+        """
+        if device_id not in self.pool:
+            return {"success": False, "output": f"Device '{device_id}' ยังไม่ได้เชื่อมต่อ"}
+
+        # Parse lines: ลบ comment (!) และ blank lines
+        lines = []
+        for line in config_text.splitlines():
+            stripped = line.strip()
+            if stripped and not stripped.startswith("!"):
+                lines.append(stripped)
+
+        if not lines:
+            return {"success": False, "output": "ไม่มี config commands ที่ valid"}
+
+        return self.send_config(device_id, lines)
+
+    def save_config(self, device_id: str) -> dict:
+        """Save running → startup (write memory) (spec 19.4)"""
+        return self.send_command(device_id, "write memory")
+
 
 def parse_interface_status(show_output: str, interface_name: str) -> str:
     """Parse admin/oper status จาก show interfaces <name> หรือ brief"""

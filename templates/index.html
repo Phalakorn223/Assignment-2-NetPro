@@ -106,6 +106,9 @@
                     <button class="tab-btn" onclick="switchTab('tab-connection')" id="btn-tab-connection">
                         <i class="fa-solid fa-plug"></i> Connect
                     </button>
+                    <button class="tab-btn" onclick="switchTab('tab-config-lifecycle')" id="btn-tab-config-lifecycle">
+                        <i class="fa-solid fa-file-export"></i> Config
+                    </button>
                 </nav>
 
                 <div class="tab-content-container">
@@ -619,8 +622,62 @@
                         </div>
                     </div>
 
-                </div><!-- end tab-content-container -->
-            </section>
+                <!-- ===== TAB 6: Config File Lifecycle (spec v3 section 19) ===== -->
+                <div id="tab-config-lifecycle" class="tab-page">
+                    <div class="section-title">
+                        <h4><i class="fa-solid fa-file-export"></i> Configuration File Management</h4>
+                        <p>Export, Merge, และ Save Configuration ของอุปกรณ์</p>
+                    </div>
+
+                    <div class="config-lifecycle-actions">
+                        <div class="lifecycle-card">
+                            <h5><i class="fa-solid fa-download"></i> Export Running Config</h5>
+                            <p>ดาวน์โหลด running-config ของอุปกรณ์เป็นไฟล์ .txt</p>
+                            <button class="btn btn-primary" onclick="exportConfig('running')">
+                                <i class="fa-solid fa-download"></i> Export Running
+                            </button>
+                        </div>
+
+                        <div class="lifecycle-card">
+                            <h5><i class="fa-solid fa-download"></i> Export Startup Config</h5>
+                            <p>ดาวน์โหลด startup-config ของอุปกรณ์เป็นไฟล์ .txt</p>
+                            <button class="btn btn-primary" onclick="exportConfig('startup')">
+                                <i class="fa-solid fa-download"></i> Export Startup
+                            </button>
+                        </div>
+
+                        <div class="lifecycle-card">
+                            <h5><i class="fa-solid fa-floppy-disk"></i> Save Running → Startup</h5>
+                            <p>บันทึก running-config เป็น startup-config (write memory)</p>
+                            <button class="btn btn-primary" onclick="saveConfig()">
+                                <i class="fa-solid fa-floppy-disk"></i> Write Memory
+                            </button>
+                        </div>
+
+                        <div class="lifecycle-card" style="grid-column: 1/-1">
+                            <h5><i class="fa-solid fa-file-import"></i> Merge Config</h5>
+                            <p>นำเข้า configuration text แล้วส่งไปยังอุปกรณ์ (lines ที่ขึ้นต้นด้วย ! จะถูกข้ามไป)</p>
+                            <textarea id="merge-config-text" class="form-control" rows="6" placeholder="วาง Cisco IOS configuration commands ที่นี่...
+interface GigabitEthernet0/0
+ ip address 10.0.0.1 255.255.255.0
+ no shutdown
+!
+router ospf 1
+ network 10.0.0.0 0.0.0.255 area 0"></textarea>
+                            <button class="btn btn-primary" onclick="mergeConfig()" style="margin-top:8px">
+                                <i class="fa-solid fa-file-import"></i> Merge to Device
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="cli-preview-box" style="margin-top:12px">
+                        <div class="cli-preview-title"><i class="fa-solid fa-terminal"></i> Config Output</div>
+                        <pre id="config-lifecycle-output">กด Export/Merge/Save เพื่อดูผลลัพธ์</pre>
+                    </div>
+                </div>
+
+            </div><!-- end tab-content-container -->
+        </section>
 
         </main>
     </div>
@@ -727,6 +784,33 @@
                 </div>
                 <button type="button" class="btn btn-primary btn-block" onclick="importEvengTopology()">
                     <i class="fa-solid fa-download"></i> Import
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ===== MODAL: Add Interface (spec v3 section 3.2) ===== -->
+    <div id="add-interface-modal" class="modal-backdrop">
+        <div class="modal-card" style="max-width:400px">
+            <div class="modal-header">
+                <div class="modal-title"><i class="fa-solid fa-plus"></i> Add Interface</div>
+                <button class="modal-close-btn" onclick="closeModal('add-interface-modal')">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label>Interface Type</label>
+                    <select id="add-if-type" class="form-control">
+                        <option value="loopback">Loopback</option>
+                        <option value="serial">Serial (WIC-2T)</option>
+                        <option value="vlan">VLAN</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Number</label>
+                    <input type="number" id="add-if-number" class="form-control" value="0" min="0">
+                </div>
+                <button class="btn btn-primary btn-block" onclick="submitAddInterface()">
+                    <i class="fa-solid fa-plus"></i> Add Interface
                 </button>
             </div>
         </div>
