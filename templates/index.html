@@ -1,541 +1,837 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>NetConfig Tracer Studio v2 — Network Automation Tool</title>
-    <meta name="description" content="Network automation tool with Packet Tracer-like UI — SSH, Telnet, Serial, Interface Config, Routing Protocols, Auto-Discovery Topology">
+    <meta name="description"
+        content="Network automation tool with Packet Tracer-like UI — SSH, Telnet, Serial, Interface Config, Routing Protocols, Auto-Discovery Topology">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600&family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link
+        href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600&family=Inter:wght@300;400;500;600;700&display=swap"
+        rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <!-- vis-network for interactive topology (Bonus) -->
     <script src="https://unpkg.com/vis-network@9.1.2/dist/vis-network.min.js"></script>
     <link rel="stylesheet" href="https://unpkg.com/vis-network@9.1.2/dist/dist/vis-network.min.css">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
 </head>
+
 <body>
-<div class="app-container">
+    <div class="app-container">
 
-    <!-- ===== NAVBAR ===== -->
-    <header class="navbar">
-        <div class="brand">
-            <i class="fa-solid fa-network-wired brand-icon"></i>
-            <div class="brand-text">
-                <span class="title">NetConfig <span class="highlight">Tracer Studio</span></span>
-                <span class="subtitle">Network Automation Tool — SSH · Telnet · Serial · EVE-NG</span>
-            </div>
-        </div>
-        <div class="nav-controls">
-            <div class="status-pill" id="global-status">
-                <span class="pulse-dot"></span>
-                <span id="status-text">Simulation Mode (No Live Device)</span>
-            </div>
-            <button class="btn btn-primary" onclick="runAutoDiscovery()" id="discover-btn">
-                <i class="fa-solid fa-radar"></i> Auto-Discover
-            </button>
-        </div>
-    </header>
-
-    <!-- ===== MAIN LAYOUT ===== -->
-    <main class="main-layout">
-
-        <!-- LEFT: Topology Canvas + Device Selector -->
-        <section class="topology-panel card">
-            <div class="panel-header">
-                <h3><i class="fa-solid fa-diagram-project"></i> Network Topology</h3>
-                <div class="panel-actions">
-                    <span class="badge" id="node-count-badge">— Devices</span>
-                    <span class="badge badge-success" id="edge-count-badge">— Links</span>
+        <!-- ===== NAVBAR ===== -->
+        <header class="navbar">
+            <div class="brand">
+                <i class="fa-solid fa-network-wired brand-icon"></i>
+                <div class="brand-text">
+                    <span class="title">NetConfig <span class="highlight">Tracer Studio</span></span>
+                    <span class="subtitle">Network Automation Tool — SSH · Telnet · Serial · EVE-NG</span>
                 </div>
             </div>
-
-            <!-- vis-network container -->
-            <div id="topology-container" class="topology-vis-container">
-                <div class="topo-loading" id="topo-loading">
-                    <i class="fa-solid fa-spinner fa-spin"></i>
-                    <span>Discovering topology...</span>
+            <div class="nav-controls">
+                <div class="status-pill" id="global-status">
+                    <span class="pulse-dot"></span>
+                    <span id="status-text">Simulation Mode (No Live Device)</span>
                 </div>
-            </div>
-
-            <div class="topology-footer">
-                <label><i class="fa-solid fa-crosshairs"></i> Target Device:</label>
-                <select id="active-device-select" class="form-control" onchange="onActiveDeviceChange()">
-                    <option value="">— Loading devices... —</option>
-                </select>
-                <button class="btn btn-outline btn-sm" onclick="openPortModal()">
-                    <i class="fa-solid fa-microchip"></i> Front Panel
+                <button class="btn btn-outline btn-sm" onclick="openEvengModal()" title="Import จาก EVE-NG">
+                    <i class="fa-solid fa-cloud-arrow-down"></i> EVE-NG
+                </button>
+                <button class="btn btn-primary" onclick="runAutoDiscovery()" id="discover-btn">
+                    <i class="fa-solid fa-radar"></i> Auto-Discover
                 </button>
             </div>
+        </header>
 
-            <!-- Device Inventory Panel -->
-            <div class="inventory-panel">
-                <div class="inventory-header" onclick="toggleInventoryPanel()">
-                    <span><i class="fa-solid fa-list"></i> Device Inventory</span>
-                    <button class="btn btn-sm btn-primary" onclick="event.stopPropagation(); openAddDeviceModal()">
-                        <i class="fa-solid fa-plus"></i> Add Device
+        <!-- ===== MAIN LAYOUT ===== -->
+        <main class="main-layout">
+
+            <!-- LEFT: Topology Canvas + Device Selector -->
+            <section class="topology-panel card">
+                <div class="panel-header">
+                    <h3><i class="fa-solid fa-diagram-project"></i> Network Topology</h3>
+                    <div class="panel-actions">
+                        <span class="badge" id="node-count-badge">— Devices</span>
+                        <span class="badge badge-success" id="edge-count-badge">— Links</span>
+                    </div>
+                </div>
+
+                <!-- vis-network container -->
+                <div id="topology-container" class="topology-vis-container">
+                    <div class="topo-loading" id="topo-loading">
+                        <i class="fa-solid fa-spinner fa-spin"></i>
+                        <span>Discovering topology...</span>
+                    </div>
+                </div>
+
+                <div class="topology-footer">
+                    <label><i class="fa-solid fa-crosshairs"></i> Target Device:</label>
+                    <select id="active-device-select" class="form-control" onchange="onActiveDeviceChange()">
+                        <option value="">— Loading devices... —</option>
+                    </select>
+                    <button class="btn btn-outline btn-sm" onclick="openPortModal()">
+                        <i class="fa-solid fa-microchip"></i> Front Panel
                     </button>
                 </div>
-                <div id="inventory-list" class="inventory-list"></div>
-            </div>
-        </section>
 
-        <!-- RIGHT: Configuration Control Panel -->
-        <section class="control-panel card">
-            <nav class="tab-header">
-                <button class="tab-btn active" onclick="switchTab('tab-interface')" id="btn-tab-interface">
-                    <i class="fa-solid fa-ethernet"></i> Interface
-                </button>
-                <button class="tab-btn" onclick="switchTab('tab-routing')" id="btn-tab-routing">
-                    <i class="fa-solid fa-route"></i> Routing
-                </button>
-                <button class="tab-btn" onclick="switchTab('tab-show')" id="btn-tab-show">
-                    <i class="fa-solid fa-eye"></i> Show
-                </button>
-                <button class="tab-btn" onclick="switchTab('tab-cli')" id="btn-tab-cli">
-                    <i class="fa-solid fa-terminal"></i> CLI
-                </button>
-                <button class="tab-btn" onclick="switchTab('tab-connection')" id="btn-tab-connection">
-                    <i class="fa-solid fa-plug"></i> Connect
-                </button>
-            </nav>
-
-            <div class="tab-content-container">
-
-                <!-- ===== TAB 1: Interface Configuration ===== -->
-                <div id="tab-interface" class="tab-page active">
-                    <div class="section-title">
-                        <h4><i class="fa-solid fa-sliders"></i> Interface Configuration</h4>
-                        <p>กำหนด IP Address, Subnet Mask และสถานะ Up/Down ของ Interface</p>
-                    </div>
-                    <form id="interface-form" onsubmit="submitInterfaceConfig(event)">
-                        <div class="form-group">
-                            <label>Interface</label>
-                            <select id="if-select" class="form-control" onchange="updateIfPreview()">
-                                <option value="GigabitEthernet0/0/0">GigabitEthernet0/0/0</option>
-                                <option value="GigabitEthernet0/0/1">GigabitEthernet0/0/1</option>
-                                <option value="GigabitEthernet0/0/2">GigabitEthernet0/0/2</option>
-                                <option value="Serial0/1/0">Serial0/1/0</option>
-                                <option value="Loopback0">Loopback0</option>
-                                <option value="FastEthernet0/1">FastEthernet0/1</option>
-                                <option value="Vlan1">Vlan1</option>
-                            </select>
-                        </div>
-                        <div class="form-row">
-                            <div class="form-group col">
-                                <label>IP Address</label>
-                                <input type="text" id="if-ip" class="form-control" placeholder="192.168.1.1" oninput="updateIfPreview()">
-                            </div>
-                            <div class="form-group col">
-                                <label>Subnet Mask</label>
-                                <input type="text" id="if-mask" class="form-control" value="255.255.255.0" oninput="updateIfPreview()">
-                            </div>
-                        </div>
-                        <div class="form-group">
-                            <label>Description (optional)</label>
-                            <input type="text" id="if-desc" class="form-control" placeholder="Link to R2" oninput="updateIfPreview()">
-                        </div>
-                        <div class="form-group">
-                            <label>Interface State</label>
-                            <div class="radio-group">
-                                <label class="radio-label">
-                                    <input type="radio" name="if-state" value="up" checked onchange="updateIfPreview()">
-                                    <span class="radio-custom green"></span>
-                                    <strong>UP</strong> — no shutdown
-                                </label>
-                                <label class="radio-label">
-                                    <input type="radio" name="if-state" value="down" onchange="updateIfPreview()">
-                                    <span class="radio-custom red"></span>
-                                    <strong>DOWN</strong> — shutdown
-                                </label>
-                            </div>
-                        </div>
-                        <div class="cli-preview-box">
-                            <div class="cli-preview-title"><i class="fa-solid fa-code"></i> Cisco IOS Preview</div>
-                            <pre id="if-cli-preview"></pre>
-                        </div>
-                        <button type="submit" class="btn btn-primary btn-block">
-                            <i class="fa-solid fa-paper-plane"></i> Deploy Interface Config
+                <!-- Device Inventory Panel -->
+                <div class="inventory-panel">
+                    <div class="inventory-header" onclick="toggleInventoryPanel()">
+                        <span><i class="fa-solid fa-list"></i> Device Inventory</span>
+                        <button class="btn btn-sm btn-primary" onclick="event.stopPropagation(); openAddDeviceModal()">
+                            <i class="fa-solid fa-plus"></i> Add Device
                         </button>
-                    </form>
+                    </div>
+                    <div id="inventory-list" class="inventory-list"></div>
                 </div>
+            </section>
 
-                <!-- ===== TAB 2: Routing Protocol Wizard ===== -->
-                <div id="tab-routing" class="tab-page">
-                    <div class="section-title">
-                        <h4><i class="fa-solid fa-signs-post"></i> Routing Protocol Configuration</h4>
-                        <p>เลือก protocol → กรอกฟอร์ม → ดู CLI Preview → Deploy</p>
-                    </div>
+            <!-- RIGHT: Configuration Control Panel -->
+            <section class="control-panel card">
+                <nav class="tab-header">
+                    <button class="tab-btn active" onclick="switchTab('tab-interface')" id="btn-tab-interface">
+                        <i class="fa-solid fa-ethernet"></i> Interface
+                    </button>
+                    <button class="tab-btn" onclick="switchTab('tab-routing')" id="btn-tab-routing">
+                        <i class="fa-solid fa-route"></i> Routing
+                    </button>
+                    <button class="tab-btn" onclick="switchTab('tab-show')" id="btn-tab-show">
+                        <i class="fa-solid fa-eye"></i> Show
+                    </button>
+                    <button class="tab-btn" onclick="switchTab('tab-cli')" id="btn-tab-cli">
+                        <i class="fa-solid fa-terminal"></i> CLI
+                    </button>
+                    <button class="tab-btn" onclick="switchTab('tab-connection')" id="btn-tab-connection">
+                        <i class="fa-solid fa-plug"></i> Connect
+                    </button>
+                </nav>
 
-                    <div class="routing-type-selector">
-                        <button class="route-type-btn active" onclick="setRoutingType('static')">Static</button>
-                        <button class="route-type-btn" onclick="setRoutingType('default')">Default</button>
-                        <button class="route-type-btn" onclick="setRoutingType('rip')">RIP v2</button>
-                        <button class="route-type-btn" onclick="setRoutingType('eigrp')">EIGRP</button>
-                        <button class="route-type-btn" onclick="setRoutingType('ospf')">OSPF</button>
-                        <button class="route-type-btn" onclick="setRoutingType('bgp')">BGP</button>
-                    </div>
+                <div class="tab-content-container">
 
-                    <form id="routing-form" onsubmit="submitRoutingConfig(event)">
-                        <input type="hidden" id="routing-type-input" value="static">
-
-                        <!-- Static Route -->
-                        <div id="routing-fields-static" class="routing-fields">
-                            <div class="form-row">
-                                <div class="form-group col"><label>Destination Network</label>
-                                    <input type="text" id="st-net" class="form-control" placeholder="10.2.2.0" oninput="updateRoutingPreview()"></div>
-                                <div class="form-group col"><label>Subnet Mask</label>
-                                    <input type="text" id="st-mask" class="form-control" value="255.255.255.0" oninput="updateRoutingPreview()"></div>
-                            </div>
-                            <div class="form-group"><label>Next-Hop IP / Exit Interface</label>
-                                <input type="text" id="st-next" class="form-control" placeholder="10.1.1.2" oninput="updateRoutingPreview()"></div>
+                    <!-- ===== TAB 1: Interface Configuration ===== -->
+                    <div id="tab-interface" class="tab-page active">
+                        <div class="section-title">
+                            <h4><i class="fa-solid fa-sliders"></i> Interface Configuration</h4>
+                            <p>กำหนด IP Address, Subnet Mask และสถานะ Up/Down ของ Interface</p>
                         </div>
-
-                        <!-- Default Static Route -->
-                        <div id="routing-fields-default" class="routing-fields d-none">
+                        <div class="interface-step-header">
+                            <span><strong>Step 1:</strong> เลือก interface จากตาราง</span>
+                            <button type="button" class="btn btn-outline btn-sm" onclick="refreshInterfaceTable(true)">
+                                <i class="fa-solid fa-rotate"></i> Refresh
+                            </button>
+                        </div>
+                        <div class="table-wrapper interface-table-wrap">
+                            <table class="data-table" id="interface-status-table">
+                                <thead>
+                                    <tr>
+                                        <th>Interface</th>
+                                        <th>IP</th>
+                                        <th>Status</th>
+                                        <th>Protocol</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="interface-table-body">
+                                    <tr>
+                                        <td colspan="4" class="text-muted">Loading...</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                        <div class="interface-step-actions">
+                            <span><strong>Step 2:</strong> สั่ง Up / Down</span>
+                            <div class="updown-btn-group">
+                                <button type="button" class="btn btn-success-outline"
+                                    onclick="applyInterfaceState('up')">
+                                    <i class="fa-solid fa-arrow-up"></i> Up
+                                </button>
+                                <button type="button" class="btn btn-danger-outline"
+                                    onclick="applyInterfaceState('down')">
+                                    <i class="fa-solid fa-arrow-down"></i> Down
+                                </button>
+                            </div>
+                            <span id="if-state-verify" class="if-state-verify"></span>
+                        </div>
+                        <hr class="section-divider">
+                        <form id="interface-form" onsubmit="submitInterfaceConfig(event)">
                             <div class="form-group">
-                                <label>Next-Hop IP / Exit Interface</label>
-                                <input type="text" id="def-next" class="form-control" placeholder="192.168.1.1" oninput="updateRoutingPreview()">
-                                <small class="form-hint">Generates: <code>ip route 0.0.0.0 0.0.0.0 &lt;next-hop&gt;</code></small>
+                                <label>Interface (สำหรับกำหนด IP)</label>
+                                <select id="if-select" class="form-control"
+                                    onchange="updateIfPreview(); syncSelectedInterfaceRow();">
+                                    <option value="GigabitEthernet0/0/0">GigabitEthernet0/0/0</option>
+                                    <option value="GigabitEthernet0/0/1">GigabitEthernet0/0/1</option>
+                                    <option value="GigabitEthernet0/0/2">GigabitEthernet0/0/2</option>
+                                    <option value="Serial0/1/0">Serial0/1/0</option>
+                                    <option value="Loopback0">Loopback0</option>
+                                    <option value="FastEthernet0/1">FastEthernet0/1</option>
+                                    <option value="Vlan1">Vlan1</option>
+                                </select>
                             </div>
-                        </div>
-
-                        <!-- RIP v2 -->
-                        <div id="routing-fields-rip" class="routing-fields d-none">
-                            <label class="mb-1">Networks to Advertise</label>
-                            <div id="rip-networks-container"></div>
-                            <button type="button" class="btn btn-outline btn-sm mt-1" onclick="addNetworkRow('rip')">
-                                <i class="fa-solid fa-plus"></i> Add Network
-                            </button>
-                        </div>
-
-                        <!-- EIGRP -->
-                        <div id="routing-fields-eigrp" class="routing-fields d-none">
-                            <div class="form-group"><label>AS Number</label>
-                                <input type="number" id="eigrp-as" class="form-control" value="100" oninput="updateRoutingPreview()"></div>
-                            <label class="mb-1">Networks (Network + Wildcard Mask)</label>
-                            <div id="eigrp-networks-container"></div>
-                            <button type="button" class="btn btn-outline btn-sm mt-1" onclick="addNetworkRow('eigrp')">
-                                <i class="fa-solid fa-plus"></i> Add Network
-                            </button>
-                        </div>
-
-                        <!-- OSPF -->
-                        <div id="routing-fields-ospf" class="routing-fields d-none">
-                            <div class="form-row">
-                                <div class="form-group col"><label>Process ID</label>
-                                    <input type="number" id="ospf-pid" class="form-control" value="1" oninput="updateRoutingPreview()"></div>
-                                <div class="form-group col"><label>Router-ID (optional)</label>
-                                    <input type="text" id="ospf-rid" class="form-control" placeholder="1.1.1.1" oninput="updateRoutingPreview()"></div>
-                            </div>
-                            <label class="mb-1">Networks (Network + Wildcard + Area)</label>
-                            <div id="ospf-networks-container"></div>
-                            <button type="button" class="btn btn-outline btn-sm mt-1" onclick="addNetworkRow('ospf')">
-                                <i class="fa-solid fa-plus"></i> Add Network
-                            </button>
-                        </div>
-
-                        <!-- BGP -->
-                        <div id="routing-fields-bgp" class="routing-fields d-none">
-                            <div class="form-group"><label>Local AS Number</label>
-                                <input type="number" id="bgp-as" class="form-control" value="65001" oninput="updateRoutingPreview()"></div>
-                            <label class="mb-1">Neighbors (IP + Remote AS)</label>
-                            <div id="bgp-neighbors-container"></div>
-                            <button type="button" class="btn btn-outline btn-sm" onclick="addNeighborRow()">
-                                <i class="fa-solid fa-plus"></i> Add Neighbor
-                            </button>
-                            <label class="mb-1 mt-2">Networks to Advertise</label>
-                            <div id="bgp-networks-container"></div>
-                            <button type="button" class="btn btn-outline btn-sm mt-1" onclick="addNetworkRow('bgp')">
-                                <i class="fa-solid fa-plus"></i> Add Network
-                            </button>
-                        </div>
-
-                        <div class="cli-preview-box mt-2">
-                            <div class="cli-preview-title"><i class="fa-solid fa-code"></i> Cisco IOS CLI Preview</div>
-                            <pre id="routing-cli-preview"></pre>
-                        </div>
-                        <button type="submit" class="btn btn-primary btn-block">
-                            <i class="fa-solid fa-floppy-disk"></i> Deploy Routing Config
-                        </button>
-                    </form>
-                </div>
-
-                <!-- ===== TAB 3: Show Commands ===== -->
-                <div id="tab-show" class="tab-page">
-                    <div class="section-title">
-                        <h4><i class="fa-solid fa-rectangle-list"></i> Show Commands</h4>
-                        <p>คลิกปุ่มเพื่อรันคำสั่งและดู output แบบ terminal</p>
-                    </div>
-
-                    <div class="show-section">
-                        <div class="show-section-label">General</div>
-                        <div class="show-buttons-grid">
-                            <button class="btn btn-outline" onclick="runShow('show ip interface brief')"><i class="fa-solid fa-list-check"></i> ip int brief</button>
-                            <button class="btn btn-outline" onclick="runShow('show interfaces status')"><i class="fa-solid fa-network-wired"></i> int status</button>
-                            <button class="btn btn-outline" onclick="runShow('show running-config')"><i class="fa-solid fa-file-code"></i> running-config</button>
-                            <button class="btn btn-outline" onclick="runShow('show version')"><i class="fa-solid fa-circle-info"></i> version</button>
-                            <button class="btn btn-outline" onclick="runShow('show vlan')"><i class="fa-solid fa-layer-group"></i> vlan</button>
-                        </div>
-                    </div>
-                    <div class="show-section">
-                        <div class="show-section-label">Routing</div>
-                        <div class="show-buttons-grid">
-                            <button class="btn btn-outline" onclick="runShow('show ip route')"><i class="fa-solid fa-map"></i> ip route</button>
-                            <button class="btn btn-outline" onclick="runShow('show ip route static')"><i class="fa-solid fa-map-pin"></i> route static</button>
-                            <button class="btn btn-outline" onclick="runShow('show ip protocols')"><i class="fa-solid fa-gear"></i> ip protocols</button>
-                        </div>
-                    </div>
-                    <div class="show-section">
-                        <div class="show-section-label">RIP / EIGRP / OSPF / BGP / CDP</div>
-                        <div class="show-buttons-grid">
-                            <button class="btn btn-outline" onclick="runShow('show ip rip database')"><i class="fa-solid fa-database"></i> rip database</button>
-                            <button class="btn btn-outline" onclick="runShow('show ip eigrp neighbors')"><i class="fa-solid fa-users"></i> eigrp neighbors</button>
-                            <button class="btn btn-outline" onclick="runShow('show ip eigrp topology')"><i class="fa-solid fa-sitemap"></i> eigrp topology</button>
-                            <button class="btn btn-outline" onclick="runShow('show ip ospf neighbor')"><i class="fa-solid fa-user-group"></i> ospf neighbor</button>
-                            <button class="btn btn-outline" onclick="runShow('show ip ospf database')"><i class="fa-solid fa-table"></i> ospf database</button>
-                            <button class="btn btn-outline" onclick="runShow('show ip ospf interface brief')"><i class="fa-solid fa-ethernet"></i> ospf int brief</button>
-                            <button class="btn btn-outline" onclick="runShow('show ip bgp summary')"><i class="fa-solid fa-chart-bar"></i> bgp summary</button>
-                            <button class="btn btn-outline" onclick="runShow('show ip bgp neighbors')"><i class="fa-solid fa-handshake"></i> bgp neighbors</button>
-                            <button class="btn btn-outline" onclick="runShow('show cdp neighbors detail')"><i class="fa-solid fa-binoculars"></i> cdp neighbors</button>
-                        </div>
-                    </div>
-
-                    <div class="terminal-container">
-                        <div class="terminal-header">
-                            <span><i class="fa-solid fa-terminal"></i> Output</span>
-                            <button class="btn-icon" onclick="copyShowOutput()" title="Copy"><i class="fa-regular fa-copy"></i></button>
-                        </div>
-                        <pre id="show-output-box" class="terminal-body">Click any Show button above...</pre>
-                    </div>
-                </div>
-
-                <!-- ===== TAB 4: CLI Terminal ===== -->
-                <div id="tab-cli" class="tab-page">
-                    <div class="section-title">
-                        <h4><i class="fa-solid fa-terminal"></i> Interactive Cisco IOS Console</h4>
-                        <p>พิมพ์คำสั่ง Cisco IOS ตรง ๆ (รองรับคำสั่งย่อ เช่น <code>sh ip int br</code>)</p>
-                    </div>
-                    <div class="terminal-container console-mode" style="height:380px">
-                        <div class="terminal-header">
-                            <span id="cli-target-label"><i class="fa-solid fa-server"></i> Target: R1</span>
-                            <button class="btn-icon" onclick="clearConsole()"><i class="fa-solid fa-trash"></i></button>
-                        </div>
-                        <div id="console-output" class="terminal-body console-body">
-                            <div class="line comment"># NetConfig Tracer Studio — Cisco IOS Console</div>
-                            <div class="line comment"># คำสั่งย่อ: sh ip int br, conf t, sh run, sh ip route, ...</div>
-                        </div>
-                        <div class="console-input-bar">
-                            <span class="prompt-symbol" id="cli-prompt">R1#</span>
-                            <div class="autocomplete-wrapper">
-                                <input type="text" id="cli-input" class="console-input"
-                                    placeholder="Type Cisco IOS command..."
-                                    onkeydown="handleCliKey(event)"
-                                    oninput="fetchSuggestions(this.value)"
-                                    autocomplete="off">
-                                <div id="autocomplete-dropdown" class="autocomplete-dropdown d-none"></div>
-                            </div>
-                            <button class="btn btn-sm btn-primary" onclick="sendConsoleCmd()">
-                                <i class="fa-solid fa-paper-plane"></i>
-                            </button>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- ===== TAB 5: Device Connection Manager ===== -->
-                <div id="tab-connection" class="tab-page">
-                    <div class="section-title">
-                        <h4><i class="fa-solid fa-tower-cell"></i> Device Connection Manager</h4>
-                        <p>เชื่อมต่ออุปกรณ์ผ่าน SSH, Telnet, หรือ Serial Console</p>
-                    </div>
-                    <form id="conn-form" onsubmit="submitConnection(event)">
-                        <div class="form-group">
-                            <label>Select Device from Inventory</label>
-                            <select id="conn-device-select" class="form-control" onchange="onConnDeviceSelect()">
-                                <option value="">— เลือกอุปกรณ์ —</option>
-                            </select>
-                        </div>
-                        <div class="form-group">
-                            <label>Connection Protocol</label>
-                            <select id="conn-proto" class="form-control" onchange="onConnProtoChange()">
-                                <option value="SSH">SSH (Netmiko — Port 22)</option>
-                                <option value="TELNET">Telnet (Netmiko — Port 23)</option>
-                                <option value="SERIAL">Serial / COM Port (PySerial Console)</option>
-                            </select>
-                        </div>
-                        <div id="ip-conn-fields">
-                            <div class="form-row">
-                                <div class="form-group col-8">
-                                    <label>IP Address / Hostname</label>
-                                    <input type="text" id="conn-ip" class="form-control" placeholder="192.168.1.120">
-                                </div>
-                                <div class="form-group col-4">
-                                    <label>Port</label>
-                                    <input type="number" id="conn-port" class="form-control" value="22">
+                            <div class="form-group" style="margin-bottom: 12px;">
+                                <div style="display:flex; justify-content:space-between; align-items:center;">
+                                    <label style="margin:0; font-weight:600;">IP Configuration Mode</label>
+                                    <div class="radio-group" style="gap:15px; margin:0;">
+                                        <label class="radio-label" style="cursor:pointer; margin:0; font-size:12px;">
+                                            <input type="radio" name="if-ip-mode" value="static" checked onchange="toggleIpMode('static')">
+                                            <span>Static IP</span>
+                                        </label>
+                                        <label class="radio-label" style="cursor:pointer; margin:0; font-size:12px;">
+                                            <input type="radio" name="if-ip-mode" value="dhcp" onchange="toggleIpMode('dhcp')">
+                                            <span>DHCP Client</span>
+                                        </label>
+                                    </div>
                                 </div>
                             </div>
                             <div class="form-row">
                                 <div class="form-group col">
-                                    <label>Username</label>
-                                    <input type="text" id="conn-user" class="form-control" value="cisco">
+                                    <label id="if-ip-label">IP Address</label>
+                                    <input type="text" id="if-ip" class="form-control" placeholder="192.168.1.1"
+                                        oninput="onIpAddressInput()">
                                 </div>
-                                <div class="form-group col">
-                                    <label>Password</label>
-                                    <input type="password" id="conn-pass" class="form-control" value="cisco">
-                                </div>
-                                <div class="form-group col">
-                                    <label>Enable Secret</label>
-                                    <input type="password" id="conn-secret" class="form-control" value="cisco">
+                                <div class="form-group col" id="if-mask-group">
+                                    <label id="if-mask-label">Subnet Mask</label>
+                                    <input type="text" id="if-mask" class="form-control" value="255.255.255.0"
+                                        oninput="updateIfPreview()">
                                 </div>
                             </div>
+                            <div class="form-group">
+                                <label>Description (optional)</label>
+                                <input type="text" id="if-desc" class="form-control" placeholder="Link to R2"
+                                    oninput="updateIfPreview()">
+                            </div>
+                            <div class="form-group">
+                                <label>Interface State</label>
+                                <div class="radio-group">
+                                    <label class="radio-label">
+                                        <input type="radio" name="if-state" value="up" checked
+                                            onchange="updateIfPreview()">
+                                        <span class="radio-custom green"></span>
+                                        <strong>UP</strong> — no shutdown
+                                    </label>
+                                    <label class="radio-label">
+                                        <input type="radio" name="if-state" value="down" onchange="updateIfPreview()">
+                                        <span class="radio-custom red"></span>
+                                        <strong>DOWN</strong> — shutdown
+                                    </label>
+                                </div>
+                            </div>
+                            <div class="cli-preview-box">
+                                <div class="cli-preview-title"><i class="fa-solid fa-code"></i> Cisco IOS Preview</div>
+                                <pre id="if-cli-preview"></pre>
+                            </div>
+                            <button type="submit" class="btn btn-primary btn-block">
+                                <i class="fa-solid fa-paper-plane"></i> Deploy Interface Config
+                            </button>
+                        </form>
+                    </div>
+
+                    <!-- ===== TAB 2: Routing Protocol Wizard ===== -->
+                    <div id="tab-routing" class="tab-page">
+                        <div class="section-title">
+                            <h4><i class="fa-solid fa-signs-post"></i> Routing Protocol Configuration</h4>
+                            <p>เลือก protocol → กรอกฟอร์ม → ดู CLI Preview → Deploy</p>
                         </div>
-                        <div id="serial-conn-fields" class="d-none">
+
+                        <div class="routing-type-selector">
+                            <button class="route-type-btn active" onclick="setRoutingType('static')">Static</button>
+                            <button class="route-type-btn" onclick="setRoutingType('default')">Default</button>
+                            <button class="route-type-btn" onclick="setRoutingType('rip')">RIP</button>
+                            <button class="route-type-btn" onclick="setRoutingType('eigrp')">EIGRP</button>
+                            <button class="route-type-btn" onclick="setRoutingType('ospf')">OSPF</button>
+                            <button class="route-type-btn" onclick="setRoutingType('bgp')">BGP</button>
+                        </div>
+
+                        <form id="routing-form" onsubmit="submitRoutingConfig(event)">
+                            <input type="hidden" id="routing-type-input" value="static">
+
+                            <!-- Static Route -->
+                            <div id="routing-fields-static" class="routing-fields">
+                                <div class="form-row">
+                                    <div class="form-group col"><label>Destination Network</label>
+                                        <input type="text" id="st-net" class="form-control" placeholder="10.2.2.0"
+                                            oninput="updateRoutingPreview()">
+                                    </div>
+                                    <div class="form-group col"><label>Subnet Mask</label>
+                                        <input type="text" id="st-mask" class="form-control" value="255.255.255.0"
+                                            oninput="updateRoutingPreview()">
+                                    </div>
+                                </div>
+                                <div class="form-group"><label>Next-Hop IP / Exit Interface</label>
+                                    <input type="text" id="st-next" class="form-control" placeholder="10.1.1.2"
+                                        oninput="updateRoutingPreview()">
+                                </div>
+                            </div>
+
+                            <!-- Default Static Route -->
+                            <div id="routing-fields-default" class="routing-fields d-none">
+                                <div class="form-group">
+                                    <label>Next-Hop IP / Exit Interface</label>
+                                    <input type="text" id="def-next" class="form-control" placeholder="192.168.1.1"
+                                        oninput="updateRoutingPreview()">
+                                    <small class="form-hint">Generates:
+                                        <code>ip route 0.0.0.0 0.0.0.0 &lt;next-hop&gt;</code></small>
+                                </div>
+                            </div>
+
+                            <!-- RIP -->
+                            <div id="routing-fields-rip" class="routing-fields d-none">
+                                <div class="form-group">
+                                    <label>RIP Version</label>
+                                    <div class="radio-group">
+                                        <label class="radio-label">
+                                            <input type="radio" name="rip-version" value="1"
+                                                onchange="updateRoutingPreview()">
+                                            <span class="radio-custom"></span> Version 1 (classful)
+                                        </label>
+                                        <label class="radio-label">
+                                            <input type="radio" name="rip-version" value="2" checked
+                                                onchange="updateRoutingPreview()">
+                                            <span class="radio-custom green"></span> Version 2 (classless + VLSM)
+                                        </label>
+                                    </div>
+                                    <small class="form-hint">v1 ไม่รองรับ no auto-summary และ VLSM แบบ
+                                        discontiguous</small>
+                                </div>
+                                <label class="mb-1">Networks to Advertise</label>
+                                <div id="rip-networks-container"></div>
+                                <button type="button" class="btn btn-outline btn-sm mt-1"
+                                    onclick="addNetworkRow('rip')">
+                                    <i class="fa-solid fa-plus"></i> Add Network
+                                </button>
+                            </div>
+
+                            <!-- EIGRP -->
+                            <div id="routing-fields-eigrp" class="routing-fields d-none">
+                                <div class="form-group"><label>AS Number</label>
+                                    <input type="number" id="eigrp-as" class="form-control" value="100"
+                                        oninput="updateRoutingPreview()">
+                                </div>
+                                <label class="mb-1">Networks (Network + Wildcard Mask)</label>
+                                <div id="eigrp-networks-container"></div>
+                                <button type="button" class="btn btn-outline btn-sm mt-1"
+                                    onclick="addNetworkRow('eigrp')">
+                                    <i class="fa-solid fa-plus"></i> Add Network
+                                </button>
+                            </div>
+
+                            <!-- OSPF -->
+                            <div id="routing-fields-ospf" class="routing-fields d-none">
+                                <div class="form-row">
+                                    <div class="form-group col"><label>Process ID</label>
+                                        <input type="number" id="ospf-pid" class="form-control" value="1"
+                                            oninput="updateRoutingPreview()">
+                                    </div>
+                                    <div class="form-group col"><label>Router-ID (optional)</label>
+                                        <input type="text" id="ospf-rid" class="form-control" placeholder="1.1.1.1"
+                                            oninput="updateRoutingPreview()">
+                                    </div>
+                                </div>
+                                <label class="mb-1">Networks (Network + Wildcard + Area)</label>
+                                <div id="ospf-networks-container"></div>
+                                <button type="button" class="btn btn-outline btn-sm mt-1"
+                                    onclick="addNetworkRow('ospf')">
+                                    <i class="fa-solid fa-plus"></i> Add Network
+                                </button>
+                            </div>
+
+                            <!-- BGP -->
+                            <div id="routing-fields-bgp" class="routing-fields d-none">
+                                <div class="form-group"><label>Local AS Number</label>
+                                    <input type="number" id="bgp-as" class="form-control" value="65001"
+                                        oninput="updateRoutingPreview()">
+                                </div>
+                                <label class="mb-1">Neighbors (IP + Remote AS)</label>
+                                <div id="bgp-neighbors-container"></div>
+                                <button type="button" class="btn btn-outline btn-sm" onclick="addNeighborRow()">
+                                    <i class="fa-solid fa-plus"></i> Add Neighbor
+                                </button>
+                                <label class="mb-1 mt-2">Networks to Advertise</label>
+                                <div id="bgp-networks-container"></div>
+                                <button type="button" class="btn btn-outline btn-sm mt-1"
+                                    onclick="addNetworkRow('bgp')">
+                                    <i class="fa-solid fa-plus"></i> Add Network
+                                </button>
+                            </div>
+
+                            <div id="redistribution-panel" class="redistribution-panel d-none">
+                                <h5><i class="fa-solid fa-shuffle"></i> Redistribution &amp; Default Route</h5>
+                                <p class="form-hint">OSPF ควรใช้ <code>subnets</code> — EIGRP ต้องระบุ metric 5 ค่า —
+                                    RIP ต้องมี metric เมื่อ redistribute จาก OSPF/EIGRP</p>
+                                <div id="redistribute-rows"></div>
+                                <button type="button" class="btn btn-outline btn-sm mt-1"
+                                    onclick="addRedistributeRow()">
+                                    <i class="fa-solid fa-plus"></i> Add Redistribute Source
+                                </button>
+                                <div class="form-group mt-2">
+                                    <label class="checkbox-label">
+                                        <input type="checkbox" id="default-originate-enable"
+                                            onchange="updateRoutingPreview(); toggleDefaultOriginateAlways()">
+                                        Originate Default Route (default-information originate)
+                                    </label>
+                                    <label class="checkbox-label d-none" id="default-originate-always-wrap">
+                                        <input type="checkbox" id="default-originate-always"
+                                            onchange="updateRoutingPreview()">
+                                        OSPF: <code>always</code>
+                                    </label>
+                                </div>
+                            </div>
+
+                            <div class="cli-preview-box mt-2">
+                                <div class="cli-preview-title"><i class="fa-solid fa-code"></i> Cisco IOS CLI Preview
+                                </div>
+                                <pre id="routing-cli-preview"></pre>
+                            </div>
+                            <button type="submit" class="btn btn-primary btn-block">
+                                <i class="fa-solid fa-floppy-disk"></i> Deploy Routing Config
+                            </button>
+                        </form>
+                    </div>
+
+                    <!-- ===== TAB 3: Show Commands ===== -->
+                    <div id="tab-show" class="tab-page">
+                        <div class="section-title">
+                            <h4><i class="fa-solid fa-rectangle-list"></i> Show Commands</h4>
+                            <p>คลิกปุ่มเพื่อรันคำสั่งและดู output แบบ terminal</p>
+                        </div>
+
+                        <div class="show-section">
+                            <div class="show-section-label">General</div>
+                            <div class="show-buttons-grid">
+                                <button class="btn btn-outline" onclick="runShow('show ip interface brief')"><i
+                                        class="fa-solid fa-list-check"></i> ip int brief</button>
+                                <button class="btn btn-outline" onclick="runShow('show interfaces status')"><i
+                                        class="fa-solid fa-network-wired"></i> int status</button>
+                                <button class="btn btn-outline" onclick="runShow('show running-config')"><i
+                                        class="fa-solid fa-file-code"></i> running-config</button>
+                                <button class="btn btn-outline" onclick="runShow('show version')"><i
+                                        class="fa-solid fa-circle-info"></i> version</button>
+                                <button class="btn btn-outline" onclick="runShow('show vlan')"><i
+                                        class="fa-solid fa-layer-group"></i> vlan</button>
+                            </div>
+                        </div>
+                        <div class="show-section">
+                            <div class="show-section-label">Routing</div>
+                            <div class="show-buttons-grid">
+                                <button class="btn btn-outline" onclick="runShow('show ip route')"><i
+                                        class="fa-solid fa-map"></i> ip route</button>
+                                <button class="btn btn-outline" onclick="runShow('show ip route static')"><i
+                                        class="fa-solid fa-map-pin"></i> route static</button>
+                                <button class="btn btn-outline" onclick="runShow('show ip protocols')"><i
+                                        class="fa-solid fa-gear"></i> ip protocols</button>
+                            </div>
+                        </div>
+                        <div class="show-section">
+                            <div class="show-section-label">RIP / EIGRP / OSPF / BGP / CDP</div>
+                            <div class="show-buttons-grid">
+                                <button class="btn btn-outline" onclick="runShow('show ip rip database')"><i
+                                        class="fa-solid fa-database"></i> rip database</button>
+                                <button class="btn btn-outline" onclick="runShow('show ip eigrp neighbors')"><i
+                                        class="fa-solid fa-users"></i> eigrp neighbors</button>
+                                <button class="btn btn-outline" onclick="runShow('show ip eigrp topology')"><i
+                                        class="fa-solid fa-sitemap"></i> eigrp topology</button>
+                                <button class="btn btn-outline" onclick="runShow('show ip ospf neighbor')"><i
+                                        class="fa-solid fa-user-group"></i> ospf neighbor</button>
+                                <button class="btn btn-outline" onclick="runShow('show ip ospf database')"><i
+                                        class="fa-solid fa-table"></i> ospf database</button>
+                                <button class="btn btn-outline" onclick="runShow('show ip ospf interface brief')"><i
+                                        class="fa-solid fa-ethernet"></i> ospf int brief</button>
+                                <button class="btn btn-outline" onclick="runShow('show ip bgp summary')"><i
+                                        class="fa-solid fa-chart-bar"></i> bgp summary</button>
+                                <button class="btn btn-outline" onclick="runShow('show ip bgp neighbors')"><i
+                                        class="fa-solid fa-handshake"></i> bgp neighbors</button>
+                                <button class="btn btn-outline" onclick="runShow('show cdp neighbors detail')"><i
+                                        class="fa-solid fa-binoculars"></i> cdp neighbors</button>
+                            </div>
+                        </div>
+
+                        <div class="terminal-container">
+                            <div class="terminal-header">
+                                <span><i class="fa-solid fa-terminal"></i> Output</span>
+                                <button class="btn-icon" onclick="copyShowOutput()" title="Copy"><i
+                                        class="fa-regular fa-copy"></i></button>
+                            </div>
+                            <pre id="show-output-box" class="terminal-body">Click any Show button above...</pre>
+                        </div>
+                    </div>
+
+                    <!-- ===== TAB 4: CLI Terminal ===== -->
+                    <div id="tab-cli" class="tab-page">
+                        <div class="section-title">
+                            <h4><i class="fa-solid fa-terminal"></i> Interactive Cisco IOS Console</h4>
+                            <p>พิมพ์คำสั่ง Cisco IOS ตรง ๆ (รองรับคำสั่งย่อ เช่น <code>sh ip int br</code>)</p>
+                        </div>
+                        <div class="show-shortcut-bar">
+                            <button type="button" class="btn btn-outline btn-sm"
+                                onclick="runShowShortcut('show ip interface brief')">IP</button>
+                            <button type="button" class="btn btn-outline btn-sm"
+                                onclick="runShowShortcut('show running-config')">Running Config</button>
+                            <button type="button" class="btn btn-outline btn-sm"
+                                onclick="runShowShortcut('show ip route')">Routing Table</button>
+                            <button type="button" class="btn btn-outline btn-sm"
+                                onclick="runShowShortcut('show interfaces status')">Interface Status</button>
+                        </div>
+                        <div class="terminal-container console-mode" style="height:380px">
+                            <div class="terminal-header">
+                                <span id="cli-target-label"><i class="fa-solid fa-server"></i> Target: R1</span>
+                                <button class="btn-icon" onclick="clearConsole()"><i
+                                        class="fa-solid fa-trash"></i></button>
+                            </div>
+                            <div id="console-output" class="terminal-body console-body">
+                                <div class="line comment"># NetConfig Tracer Studio — Cisco IOS Console</div>
+                                <div class="line comment"># คำสั่งย่อ: sh ip int br, conf t, sh run, sh ip route, ...
+                                </div>
+                            </div>
+                            <div class="console-input-bar">
+                                <span class="prompt-symbol" id="cli-prompt">R1#</span>
+                                <div class="autocomplete-wrapper">
+                                    <input type="text" id="cli-input" class="console-input"
+                                        placeholder="Type Cisco IOS command..." onkeydown="handleCliKey(event)"
+                                        oninput="fetchSuggestions(this.value)" autocomplete="off">
+                                    <div id="autocomplete-dropdown" class="autocomplete-dropdown d-none"></div>
+                                </div>
+                                <button class="btn btn-sm btn-primary" onclick="sendConsoleCmd()">
+                                    <i class="fa-solid fa-paper-plane"></i>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- ===== TAB 5: Device Connection Manager ===== -->
+                    <div id="tab-connection" class="tab-page">
+                        <div class="section-title">
+                            <h4><i class="fa-solid fa-tower-cell"></i> Device Connection Manager</h4>
+                            <p>เชื่อมต่ออุปกรณ์ผ่าน SSH, Telnet, หรือ Serial Console</p>
+                        </div>
+                        <form id="conn-form" onsubmit="submitConnection(event)">
+                            <div class="form-group">
+                                <label>Select Device from Inventory</label>
+                                <select id="conn-device-select" class="form-control" onchange="onConnDeviceSelect()">
+                                    <option value="">— เลือกอุปกรณ์ —</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label>Connection Protocol & Mode</label>
+                                <select id="conn-proto" class="form-control" onchange="onConnProtoChange()">
+                                    <option value="TELNET">EVE-NG Console / Telnet (Port 32xxx or 23)</option>
+                                    <option value="SSH">SSH — Management IP (Netmiko — Port 22)</option>
+                                    <option value="SERIAL">Serial / COM Port (PySerial Console)</option>
+                                </select>
+                            </div>
+                            <div class="quick-preset-bar mb-1" style="display:flex;gap:6px;margin-bottom:10px;">
+                                <button type="button" class="btn btn-outline btn-sm"
+                                    style="font-size:10px;padding:3px 8px;" onclick="applyQuickPreset('eveng-console')">
+                                    <i class="fa-solid fa-server"></i> EVE-NG Console (Telnet)
+                                </button>
+                                <button type="button" class="btn btn-outline btn-sm"
+                                    style="font-size:10px;padding:3px 8px;" onclick="applyQuickPreset('cisco-ssh')">
+                                    <i class="fa-solid fa-shield"></i> Cisco SSH (Port 22)
+                                </button>
+                                <button type="button" class="btn btn-outline btn-sm"
+                                    style="font-size:10px;padding:3px 8px;" onclick="applyQuickPreset('cisco-telnet')">
+                                    <i class="fa-solid fa-terminal"></i> Cisco Telnet (Port 23)
+                                </button>
+                            </div>
+                            <div id="ip-conn-fields">
+                                <div class="form-row">
+                                    <div class="form-group col-8">
+                                        <label>IP Address / EVE-NG Host</label>
+                                        <input type="text" id="conn-ip" class="form-control"
+                                            placeholder="192.168.74.133">
+                                    </div>
+                                    <div class="form-group col-4">
+                                        <label>Port (เช่น 32769 หรือ 23)</label>
+                                        <input type="number" id="conn-port" class="form-control" value="23">
+                                    </div>
+                                </div>
+                                <div class="form-row">
+                                    <div class="form-group col">
+                                        <label>Username</label>
+                                        <input type="text" id="conn-user" class="form-control" value="cisco">
+                                    </div>
+                                    <div class="form-group col">
+                                        <label>Password</label>
+                                        <input type="password" id="conn-pass" class="form-control" value="cisco">
+                                    </div>
+                                    <div class="form-group col">
+                                        <label>Enable Secret</label>
+                                        <input type="password" id="conn-secret" class="form-control" value="cisco">
+                                    </div>
+                                </div>
+                            </div>
+                            <div id="serial-conn-fields" class="d-none">
+                                <div class="form-row">
+                                    <div class="form-group col">
+                                        <label>COM Port</label>
+                                        <input type="text" id="conn-serial-port" class="form-control"
+                                            placeholder="COM3 or /dev/ttyUSB0">
+                                    </div>
+                                    <div class="form-group col">
+                                        <label>Baud Rate</label>
+                                        <select id="conn-baud" class="form-control">
+                                            <option value="9600">9600</option>
+                                            <option value="115200">115200</option>
+                                            <option value="38400">38400</option>
+                                        </select>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="conn-btn-group">
+                                <button type="button" class="btn btn-secondary" onclick="testPing()">
+                                    <i class="fa-solid fa-satellite-dish"></i> Test Ping
+                                </button>
+                                <button type="submit" class="btn btn-primary" style="flex:1">
+                                    <i class="fa-solid fa-plug"></i> Connect
+                                </button>
+                            </div>
+                            <div id="ping-result" class="ping-result-box d-none"></div>
+                        </form>
+
+                        <div class="connected-devices-section">
+                            <h5><i class="fa-solid fa-link"></i> Active Connections</h5>
+                            <div id="active-connections-list"></div>
+                        </div>
+
+                        <div class="ssh-wizard-section">
+                            <h5><i class="fa-solid fa-key"></i> SSH Setup Wizard</h5>
+                            <p class="form-hint">ต้องตั้ง <code>ip domain-name</code> ก่อน
+                                <code>crypto key generate rsa</code> — แนะนำเชื่อม Telnet/Console ก่อน
+                            </p>
                             <div class="form-row">
                                 <div class="form-group col">
-                                    <label>COM Port</label>
-                                    <input type="text" id="conn-serial-port" class="form-control" placeholder="COM3 or /dev/ttyUSB0">
+                                    <label>Domain Name</label>
+                                    <input type="text" id="ssh-domain" class="form-control" placeholder="lab.local">
                                 </div>
                                 <div class="form-group col">
-                                    <label>Baud Rate</label>
-                                    <select id="conn-baud" class="form-control">
-                                        <option value="9600">9600</option>
-                                        <option value="115200">115200</option>
-                                        <option value="38400">38400</option>
+                                    <label>RSA Key Size</label>
+                                    <select id="ssh-key-size" class="form-control">
+                                        <option value="1024">1024</option>
+                                        <option value="2048">2048</option>
+                                        <option value="4096">4096</option>
                                     </select>
                                 </div>
                             </div>
-                        </div>
-
-                        <div class="conn-btn-group">
-                            <button type="button" class="btn btn-secondary" onclick="testPing()">
-                                <i class="fa-solid fa-satellite-dish"></i> Test Ping
+                            <button type="button" class="btn btn-secondary btn-block" onclick="runSshSetupWizard()">
+                                <i class="fa-solid fa-shield-halved"></i> Run SSH Setup on Target Device
                             </button>
-                            <button type="submit" class="btn btn-primary" style="flex:1">
-                                <i class="fa-solid fa-plug"></i> Connect
-                            </button>
+                            <pre id="ssh-setup-output" class="ssh-setup-output d-none"></pre>
                         </div>
-                        <div id="ping-result" class="ping-result-box d-none"></div>
-                    </form>
-
-                    <div class="connected-devices-section">
-                        <h5><i class="fa-solid fa-link"></i> Active Connections</h5>
-                        <div id="active-connections-list"></div>
                     </div>
-                </div>
 
-            </div><!-- end tab-content-container -->
-        </section>
+                </div><!-- end tab-content-container -->
+            </section>
 
-    </main>
-</div>
+        </main>
+    </div>
 
-<!-- ===== MODAL: Add Device to Inventory ===== -->
-<div id="add-device-modal" class="modal-backdrop">
-    <div class="modal-card" style="max-width:520px">
-        <div class="modal-header">
-            <div class="modal-title"><i class="fa-solid fa-plus-circle"></i> Add Network Device</div>
-            <button class="modal-close-btn" onclick="closeModal('add-device-modal')">&times;</button>
+    <!-- ===== MODAL: Add Device to Inventory ===== -->
+    <div id="add-device-modal" class="modal-backdrop">
+        <div class="modal-card" style="max-width:520px">
+            <div class="modal-header">
+                <div class="modal-title"><i class="fa-solid fa-plus-circle"></i> Add Network Device</div>
+                <button class="modal-close-btn" onclick="closeModal('add-device-modal')">&times;</button>
+            </div>
+            <div class="modal-body">
+                <form id="add-device-form" onsubmit="submitAddDevice(event)">
+                    <div class="form-row">
+                        <div class="form-group col">
+                            <label>Device Name</label>
+                            <input type="text" id="ad-name" class="form-control" placeholder="Router-R3" required>
+                        </div>
+                        <div class="form-group col">
+                            <label>Model</label>
+                            <input type="text" id="ad-model" class="form-control" placeholder="Cisco 4331">
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group col">
+                            <label>Device Type</label>
+                            <select id="ad-type" class="form-control" onchange="onAddDeviceTypeChange()">
+                                <option value="router">Router</option>
+                                <option value="switch">Switch</option>
+                                <option value="pc">Virtual PC</option>
+                                <option value="firewall">Firewall</option>
+                            </select>
+                        </div>
+                        <div class="form-group col">
+                            <label>Connection Protocol</label>
+                            <select id="ad-proto" class="form-control">
+                                <option value="SSH">SSH</option>
+                                <option value="TELNET">Telnet</option>
+                                <option value="SERIAL">Serial</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div id="ad-network-fields">
+                        <div class="form-row">
+                            <div class="form-group col-8">
+                                <label>IP Address</label>
+                                <input type="text" id="ad-ip" class="form-control" placeholder="192.168.1.120">
+                            </div>
+                            <div class="form-group col-4">
+                                <label>Port</label>
+                                <input type="number" id="ad-port" class="form-control" value="22">
+                            </div>
+                        </div>
+                        <div class="form-row d-none" id="ad-pc-fields">
+                            <div class="form-group col">
+                                <label>Subnet Mask</label>
+                                <input type="text" id="ad-mask" class="form-control" value="255.255.255.0">
+                            </div>
+                            <div class="form-group col">
+                                <label>Default Gateway</label>
+                                <input type="text" id="ad-gateway" class="form-control" placeholder="192.168.1.1">
+                            </div>
+                        </div>
+                        <div class="form-row" id="ad-cred-fields">
+                            <div class="form-group col">
+                                <label>Username</label>
+                                <input type="text" id="ad-user" class="form-control" value="cisco">
+                            </div>
+                            <div class="form-group col">
+                                <label>Password</label>
+                                <input type="password" id="ad-pass" class="form-control" value="cisco">
+                            </div>
+                        </div>
+                    </div>
+                    <button type="submit" class="btn btn-primary btn-block mt-1">
+                        <i class="fa-solid fa-floppy-disk"></i> Save Device
+                    </button>
+                </form>
+            </div>
         </div>
-        <div class="modal-body">
-            <form id="add-device-form" onsubmit="submitAddDevice(event)">
-                <div class="form-row">
-                    <div class="form-group col">
-                        <label>Device Name</label>
-                        <input type="text" id="ad-name" class="form-control" placeholder="Router-R3" required>
-                    </div>
-                    <div class="form-group col">
-                        <label>Model</label>
-                        <input type="text" id="ad-model" class="form-control" placeholder="Cisco 4331">
-                    </div>
+    </div>
+
+    <!-- ===== MODAL: EVE-NG Import ===== -->
+    <div id="eveng-modal" class="modal-backdrop">
+        <div class="modal-card" style="max-width:480px">
+            <div class="modal-header">
+                <div class="modal-title"><i class="fa-solid fa-cloud-arrow-down"></i> Import Topology from EVE-NG</div>
+                <button class="modal-close-btn" onclick="closeModal('eveng-modal')">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group"><label>EVE-NG Host</label>
+                    <input type="text" id="eveng-host" class="form-control" placeholder="192.168.1.50">
+                </div>
+                <div class="form-group"><label>Lab Path</label>
+                    <input type="text" id="eveng-lab" class="form-control" placeholder="folder/lab.unl">
                 </div>
                 <div class="form-row">
-                    <div class="form-group col">
-                        <label>Device Type</label>
-                        <select id="ad-type" class="form-control">
-                            <option value="router">Router</option>
-                            <option value="switch">Switch</option>
-                            <option value="firewall">Firewall</option>
-                        </select>
+                    <div class="form-group col"><label>Username</label>
+                        <input type="text" id="eveng-user" class="form-control" value="admin">
                     </div>
-                    <div class="form-group col">
-                        <label>Connection Protocol</label>
-                        <select id="ad-proto" class="form-control">
-                            <option value="SSH">SSH</option>
-                            <option value="TELNET">Telnet</option>
-                            <option value="SERIAL">Serial</option>
-                        </select>
+                    <div class="form-group col"><label>Password</label>
+                        <input type="password" id="eveng-pass" class="form-control" value="eve">
                     </div>
                 </div>
-                <div class="form-row">
-                    <div class="form-group col-8">
-                        <label>IP Address</label>
-                        <input type="text" id="ad-ip" class="form-control" placeholder="192.168.1.120">
-                    </div>
-                    <div class="form-group col-4">
-                        <label>Port</label>
-                        <input type="number" id="ad-port" class="form-control" value="22">
-                    </div>
-                </div>
-                <div class="form-row">
-                    <div class="form-group col">
-                        <label>Username</label>
-                        <input type="text" id="ad-user" class="form-control" value="cisco">
-                    </div>
-                    <div class="form-group col">
-                        <label>Password</label>
-                        <input type="password" id="ad-pass" class="form-control" value="cisco">
-                    </div>
-                </div>
-                <button type="submit" class="btn btn-primary btn-block mt-1">
-                    <i class="fa-solid fa-floppy-disk"></i> Save Device
+                <button type="button" class="btn btn-primary btn-block" onclick="importEvengTopology()">
+                    <i class="fa-solid fa-download"></i> Import
                 </button>
-            </form>
+            </div>
         </div>
     </div>
-</div>
 
-<!-- ===== MODAL: Device Port Front Panel ===== -->
-<div id="port-modal" class="modal-backdrop">
-    <div class="modal-card">
-        <div class="modal-header">
-            <div class="modal-title">
-                <i class="fa-solid fa-microchip"></i>
-                <span id="modal-device-name">Device Front Panel</span>
-                <span class="badge" id="modal-device-model"></span>
+    <!-- ===== Device Config Drawer (Packet Tracer style) ===== -->
+    <div id="device-drawer" class="device-drawer d-none">
+        <div class="device-drawer-header">
+            <div>
+                <strong id="drawer-device-title">Device</strong>
+                <span class="badge" id="drawer-device-model"></span>
             </div>
-            <button class="modal-close-btn" onclick="closeModal('port-modal')">&times;</button>
+            <button class="modal-close-btn" onclick="closeDeviceDrawer()">&times;</button>
         </div>
-        <div class="modal-body">
-            <div class="chassis-front-panel">
-                <div class="chassis-header">
-                    <span class="cisco-logo">CISCO</span>
-                    <span class="chassis-model" id="chassis-model-text">Cisco Router</span>
-                    <div class="chassis-sys-leds">
-                        <span class="sys-led green">SYS</span>
-                        <span class="sys-led green">ACT</span>
-                        <span class="sys-led green">PWR</span>
+        <nav class="drawer-tabs">
+            <button type="button" class="drawer-tab active" data-drawer-tab="physical"
+                onclick="switchDrawerTab('physical')">Physical</button>
+            <button type="button" class="drawer-tab" data-drawer-tab="config"
+                onclick="switchDrawerTab('config')">Config</button>
+            <button type="button" class="drawer-tab" data-drawer-tab="terminal"
+                onclick="switchDrawerTab('terminal')">Terminal</button>
+            <button type="button" class="drawer-tab" data-drawer-tab="pc" onclick="switchDrawerTab('pc')">PC</button>
+        </nav>
+        <div class="device-drawer-body">
+            <div id="drawer-panel-physical" class="drawer-panel active"></div>
+            <div id="drawer-panel-config" class="drawer-panel">
+                <p class="form-hint">ใช้แท็บ Interface / Routing ด้านขวา — อุปกรณ์เป้าหมายถูกตั้งให้แล้ว</p>
+                <button type="button" class="btn btn-outline btn-sm"
+                    onclick="switchTab('tab-interface'); closeDeviceDrawer();">Open Interface Tab</button>
+                <button type="button" class="btn btn-outline btn-sm"
+                    onclick="switchTab('tab-routing'); closeDeviceDrawer();">Open Routing Tab</button>
+            </div>
+            <div id="drawer-panel-terminal" class="drawer-panel">
+                <div class="drawer-mini-console" id="drawer-console-output"></div>
+                <div class="console-input-bar">
+                    <span class="prompt-symbol" id="drawer-cli-prompt">#</span>
+                    <input type="text" id="drawer-cli-input" class="console-input" placeholder="show ip route"
+                        onkeydown="if(event.key==='Enter'){event.preventDefault();sendDrawerCli();}">
+                    <button class="btn btn-sm btn-primary" onclick="sendDrawerCli()"><i
+                            class="fa-solid fa-paper-plane"></i></button>
+                </div>
+            </div>
+            <div id="drawer-panel-pc" class="drawer-panel">
+                <div class="form-group"><label>IP</label><input id="drawer-pc-ip" class="form-control"></div>
+                <div class="form-group"><label>Mask</label><input id="drawer-pc-mask" class="form-control"
+                        value="255.255.255.0"></div>
+                <div class="form-group"><label>Gateway</label><input id="drawer-pc-gw" class="form-control"></div>
+                <button type="button" class="btn btn-primary btn-sm" onclick="saveDrawerPcConfig()">Save PC
+                    Config</button>
+                <div class="form-row mt-2">
+                    <input id="drawer-pc-ping-target" class="form-control" placeholder="8.8.8.8">
+                    <button type="button" class="btn btn-secondary btn-sm" onclick="pingFromDrawerPc()">Ping</button>
+                </div>
+                <pre id="drawer-pc-ping-out" class="ssh-setup-output"></pre>
+            </div>
+        </div>
+    </div>
+
+    <!-- ===== MODAL: Device Port Front Panel ===== -->
+    <div id="port-modal" class="modal-backdrop">
+        <div class="modal-card">
+            <div class="modal-header">
+                <div class="modal-title">
+                    <i class="fa-solid fa-microchip"></i>
+                    <span id="modal-device-name">Device Front Panel</span>
+                    <span class="badge" id="modal-device-model"></span>
+                </div>
+                <button class="modal-close-btn" onclick="closeModal('port-modal')">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="chassis-front-panel">
+                    <div class="chassis-header">
+                        <span class="cisco-logo">CISCO</span>
+                        <span class="chassis-model" id="chassis-model-text">Cisco Router</span>
+                        <div class="chassis-sys-leds">
+                            <span class="sys-led green">SYS</span>
+                            <span class="sys-led green">ACT</span>
+                            <span class="sys-led green">PWR</span>
+                        </div>
+                    </div>
+                    <div class="ports-matrix" id="ports-matrix-container"></div>
+                </div>
+                <div class="port-detail-inspector">
+                    <h5><i class="fa-solid fa-circle-info"></i> Interface Detail</h5>
+                    <div class="table-wrapper">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>Interface</th>
+                                    <th>Type</th>
+                                    <th>Status</th>
+                                    <th>IP Address</th>
+                                    <th>Subnet Mask</th>
+                                    <th>Speed</th>
+                                </tr>
+                            </thead>
+                            <tbody id="modal-ports-table-body"></tbody>
+                        </table>
                     </div>
                 </div>
-                <div class="ports-matrix" id="ports-matrix-container"></div>
-            </div>
-            <div class="port-detail-inspector">
-                <h5><i class="fa-solid fa-circle-info"></i> Interface Detail</h5>
-                <div class="table-wrapper">
-                    <table class="data-table">
-                        <thead>
-                            <tr>
-                                <th>Interface</th><th>Type</th><th>Status</th>
-                                <th>IP Address</th><th>Subnet Mask</th><th>Speed</th>
-                            </tr>
-                        </thead>
-                        <tbody id="modal-ports-table-body"></tbody>
-                    </table>
-                </div>
             </div>
         </div>
     </div>
-</div>
 
-<script src="{{ url_for('static', filename='js/app.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/app.js') }}"></script>
 </body>
+
 </html>

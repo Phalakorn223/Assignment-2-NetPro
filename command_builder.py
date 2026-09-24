@@ -4,12 +4,15 @@ command_builder.py — Pure functions สำหรับแปลง form data �
 """
 
 
-def build_ip_address_commands(interface: str, ip: str, mask: str, description: str = None) -> list:
-    """กำหนด IP Address บน interface พร้อม no shutdown"""
+def build_ip_address_commands(interface: str, ip: str, mask: str = None, description: str = None) -> list:
+    """กำหนด IP Address บน interface (Static หรือ DHCP) พร้อม no shutdown"""
     cmds = [f"interface {interface}"]
     if description:
         cmds.append(f"description {description}")
-    cmds.append(f"ip address {ip} {mask}")
+    if ip and ip.lower().strip() == "dhcp":
+        cmds.append("ip address dhcp")
+    else:
+        cmds.append(f"ip address {ip} {mask}")
     cmds.append("no shutdown")
     return cmds
 
@@ -36,18 +39,122 @@ def build_default_route(next_hop: str) -> list:
     return [f"ip route 0.0.0.0 0.0.0.0 {next_hop}"]
 
 
-def build_rip(networks: list) -> list:
+def build_rip(networks: list, version: int = 2) -> list:
     """
-    RIP v2 configuration
-    networks: list of network addresses (str), e.g. ["10.1.1.0", "192.168.1.0"]
+    RIP configuration — version 1 หรือ 2
+    networks: list of network addresses (str)
     """
-    cmds = ["router rip", "version 2"]
+    version = 1 if int(version) == 1 else 2
+    cmds = ["router rip", f"version {version}"]
     for net in networks:
         net = net.strip()
         if net:
             cmds.append(f"network {net}")
-    cmds.append("no auto-summary")
+    if version == 2:
+        cmds.append("no auto-summary")
     return cmds
+
+
+def build_redistribute(protocol: str, source: str, **kwargs) -> list:
+    """
+    protocol: rip | eigrp | ospf | bgp (ปลายทาง)
+    source: static | connected | rip | eigrp | ospf | bgp
+    """
+    protocol = protocol.lower()
+    source = source.lower()
+    line = f"redistribute {source}"
+
+    if source == "ospf" and protocol != "ospf":
+        pid = kwargs.get("process_id")
+        if pid is not None:
+            line += f" {pid}"
+    if source == "eigrp" and protocol != "eigrp":
+        asn = kwargs.get("as_number")
+        if asn is not None:
+            line += f" {asn}"
+
+    if protocol == "eigrp":
+        bw = kwargs.get("metric_bw", 10000)
+        delay = kwargs.get("metric_delay", 100)
+        rel = kwargs.get("metric_reliability", 255)
+        load = kwargs.get("metric_load", 1)
+        mtu = kwargs.get("metric_mtu", 1500)
+        line += f" metric {bw} {delay} {rel} {load} {mtu}"
+
+    if protocol == "ospf":
+        if kwargs.get("subnets", True):
+            line += " subnets"
+        if kwargs.get("metric") is not None:
+            line += f" metric {kwargs['metric']}"
+        if kwargs.get("metric_type") is not None:
+            line += f" metric-type {kwargs['metric_type']}"
+
+    if protocol == "rip" and kwargs.get("metric") is not None:
+        line += f" metric {kwargs['metric']}"
+
+    return [line]
+
+
+def build_default_information_originate(protocol: str, always: bool = False) -> list:
+    protocol = protocol.lower()
+    if protocol == "ospf":
+        cmd = "default-information originate"
+        if always:
+            cmd += " always"
+        return [cmd]
+    if protocol == "rip":
+        return ["default-information originate"]
+    if protocol == "bgp":
+        return ["network 0.0.0.0 mask 0.0.0.0"]
+    if protocol == "eigrp":
+        raise ValueError(
+            "EIGRP ไม่มี default-information originate โดยตรง — ใช้ ip default-network หรือ redistribute static"
+        )
+    raise ValueError(f"ไม่รู้จัก protocol: {protocol}")
+
+
+def merge_router_protocol_commands(
+    base_cmds: list,
+    protocol: str,
+    redistribute_entries: list = None,
+    default_originate: dict = None,
+) -> list:
+    """
+    แทรก redistribute / default-information หลัง network statements ภายใน router block
+    base_cmds เริ่มด้วย 'router ...'
+    """
+    if not redistribute_entries and not default_originate:
+        return base_cmds
+
+    protocol_key = protocol.lower()
+    if protocol_key in ("static", "default"):
+        return base_cmds
+
+    router_line = base_cmds[0] if base_cmds else ""
+    if not router_line.startswith("router "):
+        return base_cmds
+
+    inner = base_cmds[1:]
+    extras = []
+    for entry in redistribute_entries or []:
+        entry_kwargs = dict(entry)
+        source = entry_kwargs.pop("source", None) or entry_kwargs.pop("protocol", None)
+        if not source or source.lower() == protocol_key:
+            continue
+        extras.extend(build_redistribute(protocol_key, source, **entry_kwargs))
+
+    if default_originate and default_originate.get("enabled"):
+        try:
+            extras.extend(
+                build_default_information_originate(
+                    protocol_key,
+                    always=bool(default_originate.get("always")),
+                )
+            )
+        except ValueError:
+            pass
+
+    return [router_line] + inner + extras
 
 
 def build_eigrp(as_number: int, networks: list) -> list:

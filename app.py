@@ -8,66 +8,29 @@ from flask import Flask, render_template, request, jsonify
 from connection_manager import (
     ConnectionManager, ip_is_valid, ping_check,
     load_inventory, save_inventory, add_device_to_inventory,
-    remove_device_from_inventory, get_device_by_id
+    remove_device_from_inventory, get_device_by_id,
+    ensure_inventory_initialized, parse_interface_status,
+    parse_ip_interface_brief,
 )
 from command_builder import (
     build_ip_address_commands, build_interface_state_commands,
-    build_interface_description, build_static_route, build_default_route,
-    build_rip, build_eigrp, build_ospf, build_bgp, preview_commands
+    build_static_route, build_default_route,
+    build_rip, build_eigrp, build_ospf, build_bgp, preview_commands,
+    merge_router_protocol_commands,
 )
 from command_normalizer import normalize, get_suggestions
 from topology_builder import (
-    build_topology_graph, graph_to_json, DEMO_GRAPH_JSON, NX_AVAILABLE
+    build_topology_graph, graph_to_json, DEMO_GRAPH_JSON, NX_AVAILABLE,
+    collect_device_interfaces,
 )
 
 app = Flask(__name__)
 
 # Global Connection Manager (session pool)
 conn_mgr = ConnectionManager()
+DEMO_DEVICES = {}
 
-# Demo show-command simulation สำหรับอุปกรณ์ที่ยังไม่ได้ต่อจริง
-DEMO_DEVICES = {
-    "R1": {
-        "name": "Router-R1", "model": "Cisco 4331", "type": "router",
-        "ip": "192.168.1.116", "connection_type": "SSH",
-        "interfaces": {
-            "GigabitEthernet0/0/0": {"ip": "192.168.1.116", "mask": "255.255.255.0", "status": "up"},
-            "GigabitEthernet0/0/1": {"ip": "10.1.1.1", "mask": "255.255.255.252", "status": "up"},
-            "GigabitEthernet0/0/2": {"ip": "unassigned", "mask": "", "status": "down"},
-            "Serial0/1/0": {"ip": "172.16.1.1", "mask": "255.255.255.252", "status": "up"},
-            "Loopback0": {"ip": "1.1.1.1", "mask": "255.255.255.255", "status": "up"},
-        },
-        "routing": {
-            "static": [{"network": "192.168.2.0", "mask": "255.255.255.0", "next_hop": "10.1.1.2"}],
-            "default": {"next_hop": "192.168.1.1"},
-        },
-    },
-    "R2": {
-        "name": "Router-R2", "model": "Cisco 4331", "type": "router",
-        "ip": "192.168.1.125", "connection_type": "TELNET",
-        "interfaces": {
-            "GigabitEthernet0/0/0": {"ip": "192.168.1.125", "mask": "255.255.255.0", "status": "up"},
-            "GigabitEthernet0/0/1": {"ip": "10.1.1.2", "mask": "255.255.255.252", "status": "up"},
-            "GigabitEthernet0/0/2": {"ip": "10.2.2.1", "mask": "255.255.255.0", "status": "up"},
-            "Serial0/1/0": {"ip": "172.16.1.2", "mask": "255.255.255.252", "status": "up"},
-            "Loopback0": {"ip": "2.2.2.2", "mask": "255.255.255.255", "status": "up"},
-        },
-        "routing": {"static": [], "default": {}},
-    },
-    "SW1": {
-        "name": "Switch-SW1", "model": "Cisco Catalyst 2960", "type": "switch",
-        "ip": "192.168.1.117", "connection_type": "SSH",
-        "interfaces": {
-            "FastEthernet0/1": {"ip": "unassigned", "mask": "", "status": "up"},
-            "FastEthernet0/2": {"ip": "unassigned", "mask": "", "status": "up"},
-            "FastEthernet0/3": {"ip": "unassigned", "mask": "", "status": "down"},
-            "FastEthernet0/4": {"ip": "unassigned", "mask": "", "status": "down"},
-            "GigabitEthernet0/1": {"ip": "unassigned", "mask": "", "status": "up"},
-            "Vlan1": {"ip": "192.168.1.117", "mask": "255.255.255.0", "status": "up"},
-        },
-        "routing": {},
-    },
-}
+
 
 
 # ===========================================================================
@@ -77,200 +40,7 @@ def _get_active_device_id(data: dict) -> str:
     return data.get("device_id", "R1")
 
 
-def _demo_show(device_id: str, command: str) -> str:
-    """Simulate Cisco IOS show command output สำหรับ demo mode"""
-    dev = DEMO_DEVICES.get(device_id)
-    if not dev:
-        return f"Error: Device '{device_id}' ไม่พบในระบบ"
 
-    cmd_lower = command.lower().strip()
-    name = dev["name"]
-
-    # show ip interface brief
-    if "ip int" in cmd_lower or "ip interface brief" in cmd_lower:
-        lines = [f"{name}# {command}", f"{'Interface':<25} {'IP-Address':<16} {'OK?':<5} {'Method':<8} {'Status':<22} {'Protocol'}"]
-        lines.append("-" * 85)
-        for ifname, info in dev["interfaces"].items():
-            st = "up" if info["status"] == "up" else "administratively down"
-            pr = "up" if info["status"] == "up" else "down"
-            mt = "manual" if info["ip"] not in ("unassigned", "") else "unset"
-            lines.append(f"{ifname:<25} {info['ip']:<16} {'YES':<5} {mt:<8} {st:<22} {pr}")
-        return "\n".join(lines)
-
-    # show interfaces status
-    if "interfaces status" in cmd_lower:
-        lines = [f"{name}# {command}", f"{'Port':<22} {'Name':<20} {'Status':<12} {'Vlan':<8} {'Speed':<8}"]
-        lines.append("-" * 75)
-        for ifname, info in dev["interfaces"].items():
-            st = "connected" if info["status"] == "up" else "notconnect"
-            lines.append(f"{ifname:<22} {'':20} {st:<12} {'1':<8} {'auto':<8}")
-        return "\n".join(lines)
-
-    # show ip route
-    if "ip route" in cmd_lower and "static" not in cmd_lower:
-        routing = dev.get("routing", {})
-        default_nh = routing.get("default", {}).get("next_hop", "not set")
-        lines = [
-            f"{name}# {command}",
-            "Codes: L-local, C-connected, S-static, R-RIP, D-EIGRP, O-OSPF, B-BGP",
-            f"Gateway of last resort is {default_nh}",
-            ""
-        ]
-        for ifname, info in dev["interfaces"].items():
-            if info["status"] == "up" and info["ip"] not in ("unassigned", ""):
-                lines.append(f"C    {info['ip']}/{info['mask']} is directly connected, {ifname}")
-        for st in routing.get("static", []):
-            lines.append(f"S    {st['network']}/{st['mask']} [1/0] via {st['next_hop']}")
-        if routing.get("default", {}).get("next_hop"):
-            lines.append(f"S*   0.0.0.0/0 [1/0] via {default_nh}")
-        return "\n".join(lines)
-
-    # show ip route static
-    if "ip route static" in cmd_lower:
-        routing = dev.get("routing", {})
-        lines = [f"{name}# {command}", ""]
-        for st in routing.get("static", []):
-            lines.append(f"S    {st['network']}/{st['mask']} [1/0] via {st['next_hop']}")
-        return "\n".join(lines)
-
-    # show ip protocols
-    if "ip proto" in cmd_lower:
-        return f"""{name}# {command}
-Routing Protocol is "static"
-  Sending updates every 0 seconds
-
-Routing Protocol is "ospf 1"
-  Router-ID: 1.1.1.1
-  Outgoing update filter list for all interfaces is not set
-  Incoming update filter list for all interfaces is not set
-
-Routing Protocol is "rip"
-  Sending updates every 30 seconds, next due in 15 seconds
-  Invalid after 180 seconds, hold down 180, flushed after 240
-  Automatic network summarization is not in effect
-  Maximum path: 4"""
-
-    # show ip rip database
-    if "ip rip" in cmd_lower:
-        return f"""{name}# {command}
-10.1.1.0/30    auto-summary
-10.1.1.0/30    directly connected, GigabitEthernet0/0/1
-192.168.1.0/24 auto-summary
-192.168.1.0/24 directly connected, GigabitEthernet0/0/0
-10.2.2.0/24    [1] via 10.1.1.2, 00:00:15, GigabitEthernet0/0/1"""
-
-    # show ip eigrp neighbors
-    if "eigrp neighbor" in cmd_lower:
-        return f"""{name}# {command}
-EIGRP-IPv4 Neighbors for AS(100)
-H   Address     Interface     Hold Uptime   SRTT   RTO   Q Seq
-                              (sec)         (ms)       Cnt Num
-0   10.1.1.2    Gi0/0/1      13  01:23:45  1      200   0  45"""
-
-    # show ip eigrp topology
-    if "eigrp topo" in cmd_lower:
-        return f"""{name}# {command}
-EIGRP-IPv4 Topology Table for AS(100)/ID(1.1.1.1)
-Codes: P-Passive, A-Active, U-Update, Q-Query, R-Reply, r-reply, s-sia-query, S-sia-reply
-
-P 10.1.1.0/30, 1 successors, FD is 2816
-        via Connected, GigabitEthernet0/0/1
-P 10.2.2.0/24, 1 successors, FD is 30720
-        via 10.1.1.2 (30720/28160), GigabitEthernet0/0/1"""
-
-    # show ip ospf neighbor
-    if "ospf neighbor" in cmd_lower:
-        return f"""{name}# {command}
-Neighbor ID     Pri   State        Dead Time   Address         Interface
-2.2.2.2           1   FULL/DR      00:00:36    10.1.1.2        GigabitEthernet0/0/1"""
-
-    # show ip ospf database
-    if "ospf database" in cmd_lower:
-        return f"""{name}# {command}
-            OSPF Router with ID (1.1.1.1) (Process ID 1)
-
-                Router Link States (Area 0)
-
-Link ID       ADV Router    Age    Seq#         Checksum  Link count
-1.1.1.1       1.1.1.1       428    0x80000003   0x00CF51  3
-2.2.2.2       2.2.2.2       427    0x80000003   0x008A73  3"""
-
-    # show ip ospf interface brief
-    if "ospf interface" in cmd_lower:
-        return f"""{name}# {command}
-Interface    PID   Area         IP Address/Mask    Cost  State    Nbrs F/C
-Gi0/0/1      1     0            10.1.1.1/30        1     DR       1/1
-Lo0          1     0            1.1.1.1/32         1     LOOP     0/0"""
-
-    # show ip bgp summary
-    if "bgp summ" in cmd_lower or "bgp summary" in cmd_lower:
-        return f"""{name}# {command}
-BGP router identifier 1.1.1.1, local AS number 65001
-BGP table version is 4, main routing table version 4
-
-Neighbor        V     AS    MsgRcvd  MsgSent  TblVer  InQ  OutQ  Up/Down    State/PfxRcd
-10.1.1.2        4  65002     1234     1235       4      0     0  01:23:45     2"""
-
-    # show ip bgp neighbors
-    if "bgp neighbor" in cmd_lower:
-        return f"""{name}# {command}
-BGP neighbor is 10.1.1.2,  remote AS 65002, external link
-  BGP version 4, remote router ID 2.2.2.2
-  BGP state = Established, up for 01:23:45
-  Hold time is 180, keepalive interval is 60 seconds"""
-
-    # show cdp neighbors detail
-    if "cdp" in cmd_lower:
-        return f"""{name}# {command}
-Device ID: R2
-Entry address(es):
-  IP address: 10.1.1.2
-Platform: cisco 4331, Capabilities: Router Switch
-Interface: GigabitEthernet0/0/1, Port ID (outgoing port): GigabitEthernet0/0/1
--------------------------
-Device ID: SW1
-Entry address(es):
-  IP address: 192.168.1.117
-Platform: cisco WS-C2960, Capabilities: Switch
-Interface: GigabitEthernet0/0/0, Port ID (outgoing port): GigabitEthernet0/1"""
-
-    # show vlan
-    if "vlan" in cmd_lower:
-        return f"""{name}# {command}
-VLAN Name                             Status    Ports
----- -------------------------------- --------- -------------------------------
-1    default                          active    Fa0/1, Fa0/2, Gi0/1
-10   MANAGEMENT                       active
-20   DATA_VLAN                        active
-1002 fddi-default                     act/unsup
-1003 token-ring-default               act/unsup"""
-
-    # show version
-    if "version" in cmd_lower:
-        return f"""{name}# {command}
-Cisco IOS Software, IOSv Software (VIOS-ADVENTERPRISEK9-M), Version 15.8(3)M2
-Technical Support: http://www.cisco.com/techsupport
-ROM: Bootstrap program is IOSv
-
-{name} uptime is 1 day, 3 hours, 14 minutes
-System image file is "flash0:/vios-adventerprisek9-m"
-Processor board ID 9XXXXXXXXXXX
-2 Gigabit Ethernet interfaces
-2 Serial(sync/async) interfaces
-32768K bytes of non-volatile configuration memory."""
-
-    # show running-config
-    if "run" in cmd_lower:
-        lines = [f"{name}# {command}", "Building configuration...\n!", f"hostname {name}", "!"]
-        for ifname, info in dev["interfaces"].items():
-            lines.append(f"interface {ifname}")
-            if info["ip"] not in ("unassigned", ""):
-                lines.append(f" ip address {info['ip']} {info['mask']}")
-            lines.append(" no shutdown" if info["status"] == "up" else " shutdown")
-            lines.append("!")
-        return "\n".join(lines)
-
-    return f"{name}# {command}\n% Command output simulated successfully."
 
 
 # ===========================================================================
@@ -286,24 +56,19 @@ def index():
 # ===========================================================================
 @app.route("/api/inventory", methods=["GET"])
 def get_inventory():
-    """รายชื่อ device ทั้งหมด (จาก devices.json + demo devices)"""
-    inv = load_inventory()
-    # ถ้าไม่มีในไฟล์ ให้ใช้ demo data
-    if not inv:
-        inv = [
-            {"id": "R1", "name": "Router-R1", "model": "Cisco 4331", "device_type_label": "router",
-             "connection_type": "SSH", "ip": "192.168.1.116", "port": 22,
-             "username": "cisco", "password": "cisco", "secret": "cisco"},
-            {"id": "R2", "name": "Router-R2", "model": "Cisco 4331", "device_type_label": "router",
-             "connection_type": "TELNET", "ip": "192.168.1.125", "port": 23,
-             "username": "cisco", "password": "cisco", "secret": "cisco"},
-            {"id": "SW1", "name": "Switch-SW1", "model": "Cisco Catalyst 2960", "device_type_label": "switch",
-             "connection_type": "SSH", "ip": "192.168.1.117", "port": 22,
-             "username": "cisco", "password": "cisco", "secret": "cisco"},
-        ]
-    # เสริมสถานะการเชื่อมต่อ
+    """รายชื่อ device ทั้งหมด (จาก devices.json — seed ถูก persist ครั้งแรก)"""
+    inv = ensure_inventory_initialized()
     for dev in inv:
         dev["connected"] = conn_mgr.is_connected(dev.get("id", ""))
+        # Ensure port is always present for frontend display
+        if "port" not in dev:
+            conn_type = (dev.get("connection_type") or "SSH").upper()
+            dev["port"] = 22 if conn_type == "SSH" else 23
+        if dev.get("device_type_label") == "pc":
+            demo = DEMO_DEVICES.get(dev.get("id"))
+            if demo:
+                dev.setdefault("gateway", demo.get("gateway", ""))
+                dev.setdefault("mask", demo.get("mask", "255.255.255.0"))
     return jsonify({"success": True, "devices": inv})
 
 
@@ -311,13 +76,31 @@ def get_inventory():
 def add_device():
     """เพิ่ม device ใหม่"""
     data = request.json or {}
-    if not data.get("ip") and data.get("connection_type", "SSH").upper() != "SERIAL":
+    dtype = (data.get("device_type_label") or "router").lower()
+    conn_type = (data.get("connection_type") or "SSH").upper()
+    if dtype == "pc":
+        data["connection_type"] = "PC"
+        if not data.get("ip"):
+            return jsonify({"success": False, "message": "Virtual PC ต้องมี IP address"}), 400
+    elif not data.get("ip") and conn_type not in ("SERIAL", "PC"):
         return jsonify({"success": False, "message": "IP address จำเป็น"}), 400
     if data.get("ip"):
         valid, msg = ip_is_valid(data["ip"])
         if not valid:
             return jsonify({"success": False, "message": msg}), 400
     device = add_device_to_inventory(data)
+    if dtype == "pc":
+        DEMO_DEVICES[device["id"]] = {
+            "name": device.get("name", device["id"]),
+            "model": device.get("model", "Virtual PC"),
+            "type": "pc",
+            "ip": device.get("ip", ""),
+            "gateway": device.get("gateway", ""),
+            "mask": device.get("mask", "255.255.255.0"),
+            "connection_type": "PC",
+            "interfaces": {},
+            "routing": {},
+        }
     return jsonify({"success": True, "device": device})
 
 
@@ -327,6 +110,7 @@ def delete_device(device_id):
     if conn_mgr.is_connected(device_id):
         conn_mgr.disconnect(device_id)
     removed = remove_device_from_inventory(device_id)
+    DEMO_DEVICES.pop(device_id, None)
     return jsonify({"success": removed, "message": "ลบเรียบร้อย" if removed else "ไม่พบ device"})
 
 
@@ -354,9 +138,20 @@ def test_ping():
 @app.route("/api/connect/<device_id>", methods=["POST"])
 def connect_device(device_id):
     """เชื่อมต่อ device และเก็บ session ใน pool"""
-    data = request.json or {}
+    data = request.get_json(silent=True) or {}
+    dev = get_device_by_id(device_id) or {}
+    if not dev and not data.get("ip"):
+        return jsonify({"success": False, "message": f"ไม่พบ device '{device_id}' ใน inventory"}), 404
+    if (dev.get("device_type_label") or "").lower() == "pc":
+        return jsonify({
+            "success": True,
+            "message": "Virtual PC ไม่ต้อง SSH — ใช้ฟอร์ม IP Config และ Ping ได้ทันที",
+        })
+    # เติมพารามิเตอร์จาก inventory ถ้าไม่ได้ส่งมาใน request body
+    params = dict(dev)
+    params.update(data)
     skip_ping = data.get("skip_ping", False)
-    res = conn_mgr.connect(device_id, data, skip_ping=skip_ping)
+    res = conn_mgr.connect(device_id, params, skip_ping=skip_ping)
     return jsonify(res)
 
 
@@ -374,24 +169,90 @@ def get_connections():
 
 
 # ===========================================================================
+# Helpers — Interface list (with cache)
+# ===========================================================================
+import time as _time
+
+_interface_cache = {}   # {device_id: {"data": [...], "ts": float}}
+_IFACE_CACHE_TTL = 60   # วินาที — ใช้ cache ภายใน 60 วินาที ไม่ต้องไปถาม Router
+
+def _interfaces_for_device(device_id: str, force_refresh: bool = False) -> list:
+    """ดึง interface list — ใช้ cache เพื่อไม่ส่งคำสั่งไปรบกวน Router console"""
+    now = _time.time()
+
+    # ถ้ามี cache และยังไม่หมดอายุ → ใช้ cache เลย
+    if not force_refresh and device_id in _interface_cache:
+        cached = _interface_cache[device_id]
+        if now - cached["ts"] < _IFACE_CACHE_TTL and cached["data"]:
+            return cached["data"]
+
+    # ดึงจาก Router จริง (ผ่าน Netmiko)
+    if conn_mgr.is_connected(device_id):
+        result = conn_mgr.send_command(device_id, "show ip interface brief", use_textfsm=True)
+        parsed = parse_ip_interface_brief(result.get("output", ""))
+        if parsed:
+            _interface_cache[device_id] = {"data": parsed, "ts": now}
+            return parsed
+    return _interface_cache.get(device_id, {}).get("data", [])
+
+
+def _invalidate_interface_cache(device_id: str):
+    """ล้าง cache เมื่อมีการเปลี่ยน config interface"""
+    _interface_cache.pop(device_id, None)
+
+
+# ===========================================================================
 # Routes — Interface Configuration
 # ===========================================================================
-@app.route("/api/config/interface", methods=["POST"])
-def configure_interface():
-    """กำหนด IP Address และสถานะ Up/Down ของ interface"""
+@app.route("/api/devices/<device_id>/interfaces", methods=["GET"])
+def list_device_interfaces(device_id: str):
+    force = request.args.get("force", "").lower() in ("1", "true", "yes")
+    return jsonify({"success": True, "device_id": device_id, "interfaces": _interfaces_for_device(device_id, force_refresh=force)})
+
+
+@app.route("/api/config/interface/state", methods=["POST"])
+def set_interface_state_only():
+    """Up/Down แยกจาก IP config + verify สถานะหลัง deploy"""
     data = request.json or {}
     device_id = data.get("device_id")
     interface = data.get("interface")
-    ip = data.get("ip", "")
-    mask = data.get("mask", "255.255.255.0")
     state = data.get("state", "up")
-    description = data.get("description", "")
-
     if not device_id or not interface:
         return jsonify({"success": False, "message": "device_id และ interface จำเป็น"}), 400
+    if state not in ("up", "down"):
+        return jsonify({"success": False, "message": "state ต้องเป็น up หรือ down"}), 400
 
-    # Validate IP ถ้ามี
-    if ip:
+    cmds = build_interface_state_commands(interface, up=(state == "up"))
+    if conn_mgr.is_connected(device_id):
+        result = conn_mgr.send_config(device_id, cmds)
+        verify = conn_mgr.send_command(device_id, f"show interfaces {interface}")
+        current = parse_interface_status(verify.get("output", ""), interface)
+        result["current_status"] = current
+    else:
+        return jsonify({"success": False, "message": "Device not connected. Please connect first."})
+    result["commands"] = cmds
+    result["preview"] = preview_commands(cmds)
+    _invalidate_interface_cache(device_id)
+    return jsonify(result)
+
+
+@app.route("/api/config/interface", methods=["POST"])
+@app.route("/api/devices/<device_id>/interfaces/configure", methods=["POST"])
+def configure_interface(device_id=None):
+    """กำหนด IP Address และสถานะ Up/Down ของ interface"""
+    data = request.get_json(silent=True) or {}
+    dev_id = device_id or data.get("device_id")
+    interface = data.get("interface")
+    ip = data.get("ip", "")
+    mask = data.get("mask", "255.255.255.0")
+    state = data.get("state", data.get("status", "up"))
+    description = data.get("description", "")
+
+    if not dev_id or not interface:
+        return jsonify({"success": False, "message": "device_id และ interface จำเป็น"}), 400
+
+    # Validate IP ถ้ามี (ยกเว้นโหมด DHCP)
+    if ip and ip.lower().strip() != "dhcp":
         valid, msg = ip_is_valid(ip)
         if not valid:
             return jsonify({"success": False, "message": msg}), 400
@@ -409,98 +270,148 @@ def configure_interface():
             cmds.insert(1, f"description {description}")
 
     # ถ้า connect อยู่ส่งจริง ถ้าไม่ก็ simulate
-    if conn_mgr.is_connected(device_id):
-        result = conn_mgr.send_config(device_id, cmds)
+    if conn_mgr.is_connected(dev_id):
+        result = conn_mgr.send_config(dev_id, cmds)
     else:
-        dev = DEMO_DEVICES.get(device_id, {})
-        dev_name = dev.get("name", device_id)
-        output_lines = [f"{dev_name}(config)# {c}" for c in cmds]
-        output_lines = [f"{dev_name}#configure terminal"] + output_lines + [f"{dev_name}#end"]
-        # Update demo state
-        if device_id in DEMO_DEVICES:
-            if_data = DEMO_DEVICES[device_id]["interfaces"]
-            if interface not in if_data:
-                if_data[interface] = {"ip": "unassigned", "mask": "", "status": "down"}
-            if ip:
-                if_data[interface]["ip"] = ip
-                if_data[interface]["mask"] = mask
-            if_data[interface]["status"] = state
-        result = {"success": True, "output": "\n".join(output_lines)}
+        return jsonify({"success": False, "message": "Device not connected. Please connect first."})
 
     result["commands"] = cmds
     result["preview"] = preview_commands(cmds)
+    if "message" not in result:
+        result["message"] = f"กำหนดค่า {interface} สำเร็จ" if result.get("success") else result.get("error", "ตั้งค่าไม่สำเร็จ")
+    _invalidate_interface_cache(dev_id)
+    _interfaces_for_device(dev_id, force_refresh=True)
     return jsonify(result)
 
 
 # ===========================================================================
 # Routes — Routing Protocol Configuration
 # ===========================================================================
-@app.route("/api/config/routing", methods=["POST"])
-def configure_routing():
-    """กำหนด Routing Protocol (Static, Default, RIP, EIGRP, OSPF, BGP)"""
-    data = request.json or {}
-    device_id = data.get("device_id")
-    route_type = data.get("route_type", "")
-
-    if not device_id or not route_type:
-        return jsonify({"success": False, "message": "device_id และ route_type จำเป็น"}), 400
+def _build_routing_commands(data: dict):
+    """สร้างคำสั่ง routing จาก data payload คืน (cmds, error_message)"""
+    route_type = (data.get("route_type") or data.get("routing_type") or "").lower()
+    if not route_type:
+        return [], "route_type จำเป็น"
 
     cmds = []
-
     if route_type == "static":
         network = data.get("network", "")
         mask = data.get("mask", "255.255.255.0")
         next_hop = data.get("next_hop", "")
+        if not network and data.get("networks"):
+            nets = data.get("networks")
+            if isinstance(nets, list) and nets:
+                n0 = nets[0]
+                if isinstance(n0, dict):
+                    network = n0.get("network", "")
+                    mask = n0.get("mask", mask)
+                    next_hop = n0.get("next_hop", next_hop)
         if not network or not next_hop:
-            return jsonify({"success": False, "message": "network และ next_hop จำเป็น"}), 400
+            return [], "network และ next_hop จำเป็น"
         cmds = build_static_route(network, mask, next_hop)
 
     elif route_type == "default":
         next_hop = data.get("next_hop", "")
         if not next_hop:
-            return jsonify({"success": False, "message": "next_hop จำเป็น"}), 400
+            return [], "next_hop จำเป็น"
         cmds = build_default_route(next_hop)
 
     elif route_type == "rip":
-        networks = data.get("networks", [])  # list of strings
-        if not networks:
-            return jsonify({"success": False, "message": "ต้องมี network อย่างน้อย 1 รายการ"}), 400
-        cmds = build_rip(networks)
+        networks = data.get("networks", [])
+        cleaned = []
+        for n in networks:
+            if isinstance(n, dict):
+                cleaned.append(n.get("network", ""))
+            elif isinstance(n, str):
+                cleaned.append(n)
+        if not cleaned:
+            return [], "ต้องมี network อย่างน้อย 1 รายการ"
+        rip_version = int(data.get("rip_version", data.get("version", 2)))
+        cmds = build_rip(cleaned, version=rip_version)
+        cmds = merge_router_protocol_commands(
+            cmds, "rip",
+            data.get("redistribute"),
+            data.get("default_originate"),
+        )
 
     elif route_type == "eigrp":
-        as_num = int(data.get("as_num", 100))
-        networks = data.get("networks", [])  # list of {network, wildcard}
+        as_num = int(data.get("as_num", data.get("as_number", 100)))
+        networks = data.get("networks", [])
         if not networks:
-            return jsonify({"success": False, "message": "ต้องมี network อย่างน้อย 1 รายการ"}), 400
+            return [], "ต้องมี network อย่างน้อย 1 รายการ"
         cmds = build_eigrp(as_num, networks)
+        cmds = merge_router_protocol_commands(
+            cmds, "eigrp",
+            data.get("redistribute"),
+            data.get("default_originate"),
+        )
 
     elif route_type == "ospf":
         process_id = int(data.get("process_id", 1))
         router_id = data.get("router_id", "")
-        networks = data.get("networks", [])  # list of {network, wildcard, area}
+        networks = data.get("networks", [])
         if not networks:
-            return jsonify({"success": False, "message": "ต้องมี network อย่างน้อย 1 รายการ"}), 400
+            return [], "ต้องมี network อย่างน้อย 1 รายการ"
         cmds = build_ospf(process_id, router_id, networks)
+        cmds = merge_router_protocol_commands(
+            cmds, "ospf",
+            data.get("redistribute"),
+            data.get("default_originate"),
+        )
 
     elif route_type == "bgp":
-        as_num = int(data.get("as_num", 65001))
-        neighbors = data.get("neighbors", [])  # list of {ip, remote_as}
-        networks = data.get("networks", [])    # list of {network, mask}
+        as_num = int(data.get("as_num", data.get("as_number", 65001)))
+        neighbors = data.get("neighbors", [])
+        networks = data.get("networks", [])
         cmds = build_bgp(as_num, neighbors, networks)
-
+        cmds = merge_router_protocol_commands(
+            cmds, "bgp",
+            data.get("redistribute"),
+            data.get("default_originate"),
+        )
     else:
-        return jsonify({"success": False, "message": f"route_type '{route_type}' ไม่รองรับ"}), 400
+        return [], f"route_type '{route_type}' ไม่รองรับ"
+
+    return cmds, ""
+
+
+@app.route("/api/routing/preview", methods=["POST"])
+def preview_routing():
+    """Preview CLI commands สำหรับ routing protocol ก่อน deploy"""
+    data = request.get_json(silent=True) or {}
+    cmds, err = _build_routing_commands(data)
+    if err:
+        return jsonify({"success": False, "message": err}), 400
+    return jsonify({
+        "success": True,
+        "commands": cmds,
+        "preview": preview_commands(cmds)
+    })
+
+
+@app.route("/api/config/routing", methods=["POST"])
+@app.route("/api/routing/apply", methods=["POST"])
+def configure_routing():
+    """กำหนด Routing Protocol หรือ Apply commands ตรงไปยังอุปกรณ์"""
+    data = request.get_json(silent=True) or {}
+    device_id = data.get("device_id")
+
+    if not device_id:
+        return jsonify({"success": False, "message": "device_id จำเป็น"}), 400
+
+    # ถ้าส่ง commands list มาตรง ๆ
+    if "commands" in data and isinstance(data["commands"], list):
+        cmds = data["commands"]
+    else:
+        cmds, err = _build_routing_commands(data)
+        if err:
+            return jsonify({"success": False, "message": err}), 400
 
     # ส่งจริงหรือ simulate
     if conn_mgr.is_connected(device_id):
         result = conn_mgr.send_config(device_id, cmds)
     else:
-        dev = DEMO_DEVICES.get(device_id, {})
-        dev_name = dev.get("name", device_id)
-        output_lines = [f"{dev_name}#configure terminal"] + \
-                       [f"{dev_name}(config)# {c}" for c in cmds] + \
-                       [f"{dev_name}#end"]
-        result = {"success": True, "output": "\n".join(output_lines)}
+        return jsonify({"success": False, "message": "Device not connected. Please connect first."})
 
     result["commands"] = cmds
     result["preview"] = preview_commands(cmds)
@@ -524,7 +435,7 @@ def run_show_command():
         result = conn_mgr.send_command(device_id, command)
         output = result.get("output", "")
     else:
-        output = _demo_show(device_id, command)
+        return jsonify({"success": False, "message": "Device not connected. Please connect first."})
 
     return jsonify({"success": True, "device_id": device_id, "command": command, "output": output})
 
@@ -555,13 +466,7 @@ def execute_cli():
             result = conn_mgr.send_config(device_id, [command])
         output = result.get("output", "")
     else:
-        if is_show:
-            output = _demo_show(device_id, command)
-        else:
-            dev = DEMO_DEVICES.get(device_id, {})
-            dev_name = dev.get("name", device_id)
-            output = f"{dev_name}(config)# {command}\n{dev_name}#"
-
+        return jsonify({"success": False, "message": "Device not connected. Please connect first."})
     return jsonify({"success": True, "device_id": device_id, "command": command, "output": output})
 
 
@@ -579,19 +484,179 @@ def get_command_suggestions():
 # ===========================================================================
 # Routes — Topology (Bonus)
 # ===========================================================================
+@app.route("/api/config/ssh-setup", methods=["POST"])
+def ssh_setup_wizard():
+    data = request.json or {}
+    device_id = data.get("device_id")
+    domain = (data.get("domain_name") or "").strip()
+    if not device_id or not domain:
+        return jsonify({"success": False, "message": "device_id และ domain_name จำเป็น"}), 400
+    key_size = int(data.get("key_size", 1024))
+    username = data.get("username", "cisco")
+    password = data.get("password", "cisco")
+    if conn_mgr.is_connected(device_id):
+        result = conn_mgr.setup_ssh(device_id, domain, key_size, username, password)
+    else:
+        return jsonify({"success": False, "message": "Device not connected. Please connect first."})
+    return jsonify(result)
+
+
+@app.route("/api/pc/<device_id>/config", methods=["POST"])
+def configure_virtual_pc(device_id: str):
+    data = request.json or {}
+    dev = get_device_by_id(device_id)
+    if not dev or (dev.get("device_type_label") or "").lower() != "pc":
+        return jsonify({"success": False, "message": "ไม่ใช่ Virtual PC"}), 400
+    ip = data.get("ip", "")
+    mask = data.get("mask", "255.255.255.0")
+    gateway = data.get("gateway", "")
+    if ip:
+        valid, msg = ip_is_valid(ip)
+        if not valid:
+            return jsonify({"success": False, "message": msg}), 400
+    devices = load_inventory()
+    for d in devices:
+        if d.get("id") == device_id:
+            d["ip"] = ip
+            d["mask"] = mask
+            d["gateway"] = gateway
+            break
+    save_inventory(devices)
+    return jsonify({"success": True, "message": "บันทึก IP config ของ Virtual PC แล้ว"})
+
+
+@app.route("/api/pc/<device_id>/ping", methods=["POST"])
+def virtual_pc_ping(device_id: str):
+    data = request.json or {}
+    target = (data.get("target") or "").strip()
+    if not target:
+        return jsonify({"success": False, "message": "ต้องระบุ target IP"}), 400
+    valid, msg = ip_is_valid(target)
+    if not valid:
+        return jsonify({"success": False, "message": msg}), 400
+
+    dev = get_device_by_id(device_id) or {}
+    gateway_id = data.get("via_device_id") or dev.get("gateway_router")
+    gateway_ip = dev.get("gateway", "")
+
+    if gateway_id and conn_mgr.is_connected(gateway_id):
+        result = conn_mgr.send_command(gateway_id, f"ping {target} repeat 3")
+        output = result.get("output", "")
+        success_rate = ("!" in output and "Success rate is 0 percent" not in output)
+        return jsonify({
+            "success": True,
+            "reachable": success_rate,
+            "output": f"[Ping from router {gateway_id} as PC gateway proxy]\n{output}",
+        })
+
+    reachable = ping_check(target)
+    return jsonify({
+        "success": True,
+        "reachable": reachable,
+        "output": (
+            f"Virtual PC {dev.get('name', device_id)} ({dev.get('ip', 'N/A')}) "
+            f"gateway {gateway_ip or 'N/A'} → ping {target}\n"
+            + ("SUCCESS: host ตอบสนอง" if reachable else "FAIL: ไม่ตอบสนอง ping จากเครื่องที่รันแอป")
+        ),
+    })
+
+
+@app.route("/api/eveng/import", methods=["POST"])
+def import_eveng_topology():
+    data = request.json or {}
+    host = (data.get("host") or "").strip()
+    lab_path = (data.get("lab_path") or "").strip()
+    username = data.get("username", "admin")
+    password = data.get("password", "eve")
+    if not host or not lab_path:
+        return jsonify({"success": False, "message": "host และ lab_path จำเป็น"}), 400
+    try:
+        from eve_ng_client import EveNgClient, eveng_topology_to_graph
+        client = EveNgClient(host, username, password)
+        topo_raw = client.get_topology(lab_path)
+        nodes_raw = client.get_nodes(lab_path)
+        try:
+            networks_raw = client.get_networks(lab_path)
+        except Exception:
+            networks_raw = None
+        graph = eveng_topology_to_graph(topo_raw, nodes_raw, networks_raw)
+
+        # เพิ่ม Nodes จาก EVE-NG ลงใน Inventory เพื่อให้เลือกและกดใช้งานได้ทันที
+        inv = load_inventory()
+        existing_names = {d.get("name", "").lower(): d for d in inv}
+        existing_ids = {d.get("id", "").lower(): d for d in inv}
+
+        nodes_data_map = nodes_raw.get("data", {}) if isinstance(nodes_raw, dict) else {}
+        clean_host = host.replace("http://", "").replace("https://", "").split("/")[0]
+
+        for n in graph.get("nodes", []):
+            nid = str(n.get("id"))
+            name = n.get("name", f"Node-{nid}")
+            dtype = n.get("type", "router")
+            
+            # ข้ามการเพิ่ม network nodes (cloud/bridge) เข้า inventory — ไม่ใช่ device
+            if dtype == "network":
+                continue
+            
+            # ดึง port telnet console จาก EVE-NG node metadata ถ้ามี
+            raw_node_info = nodes_data_map.get(nid) if isinstance(nodes_data_map, dict) else {}
+            console_port = 23
+            if isinstance(raw_node_info, dict):
+                console_port = int(raw_node_info.get("port") or raw_node_info.get("url", "").split(":")[-1] or 23)
+
+            matched = existing_names.get(name.lower()) or existing_ids.get(nid.lower())
+            if matched:
+                matched["ip"] = matched.get("ip") or clean_host
+                matched["port"] = matched.get("port") or console_port
+                matched["connection_type"] = matched.get("connection_type") or "TELNET"
+            else:
+                new_dev = {
+                    "id": name,
+                    "name": name,
+                    "model": n.get("model") or "Cisco IOS",
+                    "device_type_label": dtype,
+                    "connection_type": "TELNET",
+                    "ip": clean_host,
+                    "port": console_port,
+                    "username": "",
+                    "password": "",
+                    "mask": "255.255.255.0",
+                    "gateway": ""
+                }
+                inv.append(new_dev)
+
+
+        save_inventory(inv)
+        return jsonify({"success": True, "demo": False, "source": "eveng", "devices": inv, **graph})
+    except Exception as e:
+        return jsonify({"success": False, "message": f"EVE-NG import ล้มเหลว: {e}"}), 502
+
+
 @app.route("/api/topology/json", methods=["GET"])
 def get_topology_json():
     """Auto-Discovery และคืน graph JSON สำหรับ vis-network frontend"""
-    inv = load_inventory()
+    inv = ensure_inventory_initialized()
     if not inv:
-        # Demo mode: คืน demo graph
         return jsonify({"success": True, "demo": True, **DEMO_GRAPH_JSON})
 
     connected_ids = [d["id"] for d in conn_mgr.get_connected_devices()]
 
     if NX_AVAILABLE and connected_ids:
+        print(f"[Topology] Running auto-discovery for {len(connected_ids)} connected device(s): {connected_ids}")
         G = build_topology_graph(conn_mgr, connected_ids, inv)
         topo = graph_to_json(G, inv)
+        print(f"[Topology] Discovered {len(topo.get('nodes', []))} nodes, {len(topo.get('edges', []))} edges")
+        for edge in topo.get("edges", []):
+            detail = f"  Edge: {edge['from']} ({edge.get('from_port','')}"
+            if edge.get('from_ip'):
+                detail += f" IP:{edge['from_ip']}"
+            detail += f") <-> {edge['to']} ({edge.get('to_port','')}" 
+            if edge.get('to_ip'):
+                detail += f" IP:{edge['to_ip']}"
+            detail += f") [{edge.get('method','')}]"
+            if edge.get('subnet'):
+                detail += f" subnet={edge['subnet']}"
+            print(detail)
     else:
         # Fallback: สร้าง nodes จาก inventory ทั้งหมด
         topo = {
@@ -606,43 +671,88 @@ def get_topology_json():
     return jsonify({"success": True, "demo": len(connected_ids) == 0, **topo})
 
 
+@app.route("/api/topology/interfaces", methods=["GET"])
+def get_all_device_interfaces_for_topology():
+    """
+    Diagnostic endpoint: ดึง interface IP จริงจากทุก device ที่ connect อยู่
+    เพื่อตรวจสอบว่า auto-discovery เห็นอะไรบ้าง
+    """
+    connected = conn_mgr.get_connected_devices()
+    result = {}
+    for c in connected:
+        dev_id = c["id"]
+        ifaces = collect_device_interfaces(conn_mgr, dev_id)
+        result[dev_id] = ifaces
+        print(f"[Topology Debug] {dev_id} interfaces:")
+        for iface in ifaces:
+            print(f"  {iface['name']:25s} IP: {iface['ip']:16s} Mask: {iface['mask']:16s} Status: {iface['status']}")
+    return jsonify({"success": True, "device_interfaces": result})
+
+
 @app.route("/api/ports/<device_id>", methods=["GET"])
 def get_device_ports(device_id: str):
     """คืนข้อมูล port front-panel สำหรับ Modal (Bonus)"""
     # ลองดึงจาก live device ก่อน
+    raw = ""
     if conn_mgr.is_connected(device_id):
         result = conn_mgr.send_command(device_id, "show ip interface brief", use_textfsm=True)
         raw = result.get("output", "")
-    else:
-        raw = _demo_show(device_id, "show ip interface brief")
-
-    # Parse port data
-    dev = DEMO_DEVICES.get(device_id, {})
-    ports = []
-    for if_name, if_info in dev.get("interfaces", {}).items():
-        short = _short_if_name(if_name)
-        ports.append({
-            "name": if_name,
-            "short_name": short,
-            "type": "serial" if "Serial" in if_name else
-                    "virtual" if ("Loopback" in if_name or "Vlan" in if_name) else "ethernet",
-            "status": if_info.get("status", "down"),
-            "ip": if_info.get("ip", "unassigned"),
-            "mask": if_info.get("mask", ""),
-            "speed": "1.544Mbps" if "Serial" in if_name else
-                     "Virtual" if "Loopback" in if_name else
-                     "100Mbps" if "Fast" in if_name else "1Gbps",
-            "led": "green" if if_info.get("status") == "up" else "red",
+    
+    inv_dev = get_device_by_id(device_id) or {}
+    if inv_dev.get("device_type_label") == "pc":
+        return jsonify({
+            "success": True,
+            "device": {
+                "id": device_id,
+                "name": inv_dev.get("name", device_id),
+                "model": inv_dev.get("model", "Virtual PC"),
+                "type": "pc",
+                "ip": inv_dev.get("ip", ""),
+                "connected": False,
+            },
+            "ports": [{
+                "name": "NIC0",
+                "short_name": "NIC0",
+                "type": "ethernet",
+                "status": "up",
+                "ip": inv_dev.get("ip", "unassigned"),
+                "mask": inv_dev.get("mask", ""),
+                "speed": "100Mbps",
+                "led": "green",
+            }],
         })
+
+    iface_rows = _interfaces_for_device(device_id)
+    ports = []
+    if iface_rows:
+        for row in iface_rows:
+            if_name = row["name"]
+            st = row.get("status", "down")
+            ip = row.get("ip", "unassigned")
+            ports.append({
+                "name": if_name,
+                "short_name": _short_if_name(if_name),
+                "type": "serial" if "Serial" in if_name else
+                        "virtual" if ("Loopback" in if_name or "Vlan" in if_name) else "ethernet",
+                "status": st,
+                "ip": ip,
+                "mask": "",
+                "speed": "1.544Mbps" if "Serial" in if_name else
+                         "Virtual" if "Loopback" in if_name else
+                         "100Mbps" if "Fast" in if_name else "1Gbps",
+                "led": "green" if st == "up" else "red",
+            })
+
+
 
     return jsonify({
         "success": True,
         "device": {
             "id": device_id,
-            "name": dev.get("name", device_id),
-            "model": dev.get("model", "Cisco IOS"),
-            "type": dev.get("type", "router"),
-            "ip": dev.get("ip", ""),
+            "name": inv_dev.get("name", device_id),
+            "model": inv_dev.get("model", "Cisco IOS"),
+            "type": inv_dev.get("device_type_label", "router"),
+            "ip": inv_dev.get("ip", ""),
             "connected": conn_mgr.is_connected(device_id),
         },
         "ports": ports

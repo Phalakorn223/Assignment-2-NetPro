@@ -1,1 +1,41 @@
-[]
+[
+  {
+    "id": "R1",
+    "name": "R1",
+    "model": "L3-ADVENTERPRISEK9-M-15.4-2T.bin",
+    "device_type_label": "router",
+    "connection_type": "TELNET",
+    "ip": "192.168.74.131",
+    "port": 32769,
+    "username": "",
+    "password": "",
+    "mask": "255.255.255.0",
+    "gateway": ""
+  },
+  {
+    "id": "R2",
+    "name": "R2",
+    "model": "L3-ADVENTERPRISEK9-M-15.4-2T.bin",
+    "device_type_label": "router",
+    "connection_type": "TELNET",
+    "ip": "192.168.74.131",
+    "port": 32770,
+    "username": "",
+    "password": "",
+    "mask": "255.255.255.0",
+    "gateway": ""
+  },
+  {
+    "id": "R3",
+    "name": "R3",
+    "model": "L3-ADVENTERPRISEK9-M-15.4-2T.bin",
+    "device_type_label": "router",
+    "connection_type": "TELNET",
+    "ip": "192.168.74.131",
+    "port": 32771,
+    "username": "",
+    "password": "",
+    "mask": "255.255.255.0",
+    "gateway": ""
+  }
+]
