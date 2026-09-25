@@ -51,6 +51,59 @@ def _get_active_device_id(data: dict) -> str:
     return data.get("device_id", "R1")
 
 
+def _demo_show(device_id: str, command: str) -> str:
+    """Simulate Cisco IOS show command output สำหรับ demo mode หรือเมื่อ device offline"""
+    dev = DEMO_DEVICES.get(device_id) or get_device_by_id(device_id)
+    if not dev:
+        return f"Error: Device '{device_id}' ไม่พบในระบบ"
+
+    cmd_lower = command.lower().strip()
+    name = dev.get("name", device_id)
+    raw_ifaces = dev.get("interfaces", {})
+    if isinstance(raw_ifaces, list):
+        interfaces = {iface.get("name", f"if{i}"): iface for i, iface in enumerate(raw_ifaces)}
+    elif isinstance(raw_ifaces, dict):
+        interfaces = raw_ifaces
+    else:
+        interfaces = {}
+
+    # show ip interface brief
+    if "ip int" in cmd_lower or "ip interface brief" in cmd_lower:
+        lines = [f"{name}# {command}", f"{'Interface':<25} {'IP-Address':<16} {'OK?':<5} {'Method':<8} {'Status':<22} {'Protocol'}"]
+        lines.append("-" * 85)
+        for ifname, info in interfaces.items():
+            st = "up" if info.get("status") == "up" else "administratively down"
+            pr = "up" if info.get("status") == "up" else "down"
+            ip = info.get("ip", "unassigned")
+            mt = "manual" if ip not in ("unassigned", "", None) else "unset"
+            lines.append(f"{ifname:<25} {ip:<16} {'YES':<5} {mt:<8} {st:<22} {pr}")
+        return "\n".join(lines)
+
+    # show interfaces status
+    if "interfaces status" in cmd_lower:
+        lines = [f"{name}# {command}", f"{'Port':<22} {'Name':<20} {'Status':<12} {'Vlan':<8} {'Speed':<8}"]
+        lines.append("-" * 75)
+        for ifname, info in interfaces.items():
+            st = "connected" if info.get("status") == "up" else "notconnect"
+            lines.append(f"{ifname:<22} {'':20} {st:<12} {'1':<8} {'auto':<8}")
+        return "\n".join(lines)
+
+    # show running-config or startup-config
+    if "run" in cmd_lower or "start" in cmd_lower:
+        lines = [f"{name}# {command}", "Building configuration...\n!", f"hostname {name}", "!"]
+        for ifname, info in interfaces.items():
+            lines.append(f"interface {ifname}")
+            ip = info.get("ip", "unassigned")
+            mask = info.get("mask", "")
+            if ip not in ("unassigned", "", None):
+                lines.append(f" ip address {ip} {mask or '255.255.255.0'}")
+            lines.append(" no shutdown" if info.get("status") == "up" else " shutdown")
+            lines.append("!")
+        return "\n".join(lines)
+
+    return f"{name}# {command}\n% Command output simulated successfully."
+
+
 
 
 
@@ -590,30 +643,66 @@ def execute_cli():
     target_id = dev.get("id", device_id) if dev else device_id
 
     conn_err = None
-    if not conn_mgr.is_connected(target_id) and not conn_mgr.is_connected(device_id):
+    active_id = target_id if conn_mgr.is_connected(target_id, check_alive=True) else (device_id if conn_mgr.is_connected(device_id, check_alive=True) else None)
+    if not active_id:
         if dev and (dev.get("device_type_label") or "").lower() not in ("pc", "network"):
             c_res = conn_mgr.connect(target_id, dev, skip_ping=True)
-            if not c_res.get("success"):
+            if c_res.get("success"):
+                active_id = target_id
+            else:
                 conn_err = c_res.get("message", "เชื่อมต่อล้มเหลว")
 
-    active_id = target_id if conn_mgr.is_connected(target_id) else (device_id if conn_mgr.is_connected(device_id) else None)
     if active_id:
         res = conn_mgr.send_interactive(active_id, raw_command)
         output = res.get("output", "")
         prompt = res.get("prompt", "")
+        is_password = res.get("is_password", False)
         return jsonify({
             "success": res.get("success", False),
             "device_id": device_id,
             "command": command or raw_command,
             "output": output,
             "prompt": prompt,
+            "is_password": is_password,
             "message": output if not res.get("success") else ""
         })
     else:
-        err_msg = conn_err or "Device not connected. Please connect first."
+        err_msg = conn_err or f"Device '{device_id}' ยังไม่ได้เชื่อมต่อ กรุณากด Connect ก่อนใช้งาน CLI"
         if "PermissionError" in err_msg or "Access is denied" in err_msg:
             err_msg = "ไม่สามารถเปิดพอร์ต COM7 ได้ เนื่องจากพอร์ตถูกใช้งานโดยโปรแกรมอื่น (เช่น Tera Term) — กรุณาปิด Tera Term ก่อนใช้งาน"
         return jsonify({"success": False, "message": err_msg})
+
+
+@app.route("/api/cli/reconnect", methods=["POST"])
+def cli_reconnect():
+    """บังคับ Reconnect session สำหรับ CLI Terminal"""
+    data = request.json or {}
+    device_id = data.get("device_id", "R1")
+    dev = get_device_by_id(device_id)
+    target_id = dev.get("id", device_id) if dev else device_id
+    conn_mgr.disconnect(target_id)
+    conn_mgr.disconnect(device_id)
+    if dev:
+        res = conn_mgr.connect(target_id, dev, skip_ping=True)
+        if res.get("success"):
+            p_res = conn_mgr.send_interactive(target_id, "")
+            return jsonify({
+                "success": True,
+                "device_id": device_id,
+                "message": f"เชื่อมต่อกับ {device_id} สำเร็จแล้ว",
+                "prompt": p_res.get("prompt", "")
+            })
+        return jsonify({"success": False, "message": res.get("message", "Reconnect ล้มเหลว")})
+    return jsonify({"success": False, "message": f"ไม่พบ device '{device_id}'"})
+
+
+@app.route("/api/connections/keepalive", methods=["POST"])
+def connections_keepalive():
+    """ส่ง Telnet/SSH keepalive NOP เพื่อรักษา connection กับ Switch/Router ไม่ให้ idle timeout"""
+    data = request.json or {}
+    device_id = data.get("device_id")
+    conn_mgr.send_keepalive(device_id)
+    return jsonify({"success": True, "connected": conn_mgr.get_connected_devices()})
 
 
 # ===========================================================================
@@ -654,11 +743,20 @@ def configure_virtual_pc(device_id: str):
     if not dev or (dev.get("device_type_label") or "").lower() != "pc":
         return jsonify({"success": False, "message": "ไม่ใช่ Virtual PC"}), 400
     ip = data.get("ip", "")
+    mask = data.get("mask", "255.255.255.0")
     gateway = data.get("gateway", "")
     if ip:
         valid, msg = ip_is_valid(ip)
         if not valid:
             return jsonify({"success": False, "message": msg}), 400
+    if mask:
+        valid, msg = validate_subnet_mask(mask)
+        if not valid:
+            return jsonify({"success": False, "message": msg}), 400
+    if gateway:
+        valid, msg = ip_is_valid(gateway)
+        if not valid:
+            return jsonify({"success": False, "message": f"Gateway IP ไม่ถูกต้อง: {msg}"}), 400
     devices = load_inventory()
     for d in devices:
         if d.get("id") == device_id:
@@ -667,6 +765,10 @@ def configure_virtual_pc(device_id: str):
             d["gateway"] = gateway
             break
     save_inventory(devices)
+    if device_id in DEMO_DEVICES:
+        DEMO_DEVICES[device_id]["ip"] = ip
+        DEMO_DEVICES[device_id]["mask"] = mask
+        DEMO_DEVICES[device_id]["gateway"] = gateway
     return jsonify({"success": True, "message": "บันทึก IP config ของ Virtual PC แล้ว"})
 
 

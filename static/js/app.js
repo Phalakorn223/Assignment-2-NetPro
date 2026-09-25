@@ -119,27 +119,86 @@ function populateDeviceSelects() {
     updatePromptLabel();
 }
 
+// Terminal Emulator multi-session state store (per device buffer)
+const deviceTerminalState = {};
+let cliIsPasswordMode = false;
+
+function saveCurrentDeviceTerminalState() {
+    if (!activeDeviceId) return;
+    const linesEl = document.getElementById("cli-lines");
+    deviceTerminalState[activeDeviceId] = {
+        html: linesEl ? linesEl.innerHTML : "",
+        prompt: cliDirectPrompt || getCliPrompt(),
+        isPassword: cliIsPasswordMode,
+        history: [...cliHistory]
+    };
+}
+
+function restoreDeviceTerminalState(deviceId) {
+    const linesEl = document.getElementById("cli-lines");
+    const input = document.getElementById("cli-input");
+    const state = deviceTerminalState[deviceId];
+    if (state) {
+        if (linesEl) linesEl.innerHTML = state.html;
+        cliDirectPrompt = state.prompt || "";
+        cliIsPasswordMode = !!state.isPassword;
+        cliHistory = state.history || [];
+    } else {
+        if (linesEl) linesEl.innerHTML = "";
+        cliDirectPrompt = "";
+        cliIsPasswordMode = false;
+        cliHistory = [];
+        refreshDeviceCliPrompt();
+    }
+    if (input) {
+        input.type = cliIsPasswordMode ? "password" : "text";
+        input.value = "";
+    }
+    updatePromptLabel();
+    updateCliConnectionBadge();
+    scrollToBottom();
+}
+
+function updateCliConnectionBadge() {
+    const badge = document.getElementById("cli-conn-badge");
+    if (!badge) return;
+    const dev = inventoryDevices.find(d => d.id === activeDeviceId);
+    const connType = dev?.connection_type || (dev?.device_type_label === "pc" ? "PC" : "TELNET");
+    const endpoint = dev?.connection_type === "SERIAL" ? (dev.serial_port || "COM1") : (dev?.ip ? `${dev.ip}:${dev.port || 23}` : "127.0.0.1");
+
+    if (dev && dev.connected) {
+        badge.className = "badge badge-success";
+        badge.style.background = "#065f46";
+        badge.style.borderColor = "#10b981";
+        badge.style.color = "#6ee7b7";
+        badge.textContent = `● ${connType} ${endpoint}`;
+    } else {
+        badge.className = "badge badge-warning";
+        badge.style.background = "#374151";
+        badge.style.borderColor = "#6b7280";
+        badge.style.color = "#9ca3af";
+        badge.textContent = `○ ${connType} (OFFLINE)`;
+    }
+}
+
 function selectActiveDevice(deviceId, forceRefresh = true) {
     if (typeof deviceId === "string" && (deviceId.startsWith("Net ") || deviceId.startsWith("Net_"))) return;
 
     const dev = inventoryDevices.find(d => d.id === deviceId || d.name === deviceId || String(d.id) === String(deviceId));
-    if (dev) {
-        activeDeviceId = dev.id;
-    } else {
-        activeDeviceId = deviceId;
+    const newId = dev ? dev.id : deviceId;
+
+    if (activeDeviceId && activeDeviceId !== newId) {
+        saveCurrentDeviceTerminalState();
     }
+    activeDeviceId = newId;
+
     const sel = document.getElementById("active-device-select");
     if (sel && dev) sel.value = dev.id;
     const connSel = document.getElementById("conn-device-select");
     if (connSel && dev) connSel.value = dev.id;
 
     cliCustomHostname = null;
-    cliDirectPrompt = "";
-    cliMode = "exec";
-    cliContext = [];
-    cliSubmodeLabel = "";
-    updatePromptLabel();
-    refreshDeviceCliPrompt();
+    restoreDeviceTerminalState(activeDeviceId);
     updateActiveInventoryHighlight();
     updateInterfaceOptions();
     refreshInterfaceTable(forceRefresh);
@@ -155,14 +214,15 @@ function selectActiveDevice(deviceId, forceRefresh = true) {
 }
 
 function onActiveDeviceChange() {
-    activeDeviceId = document.getElementById("active-device-select").value;
-    cliDirectPrompt = "";
-    updatePromptLabel();
-    refreshDeviceCliPrompt();
+    const newId = document.getElementById("active-device-select").value;
+    if (activeDeviceId !== newId) {
+        saveCurrentDeviceTerminalState();
+        activeDeviceId = newId;
+        restoreDeviceTerminalState(activeDeviceId);
+    }
     updateActiveInventoryHighlight();
     updateInterfaceOptions();
     refreshInterfaceTable(true);
-    appendConsole(`# Switched target to ${activeDeviceId}`, "comment");
 
     if (typeof visNodes !== "undefined" && visNodes) {
         try {
@@ -195,7 +255,7 @@ function setCliDirectPrompt(prompt) {
     if (!prompt) return;
     cliDirectPrompt = prompt.trim();
     const promptEl = document.getElementById("cli-prompt");
-    if (promptEl) promptEl.textContent = cliDirectPrompt;
+    if (promptEl) promptEl.textContent = getCliPrompt();
 
     const match = cliDirectPrompt.match(/^([A-Za-z0-9_\-\.]+)/);
     if (match) {
@@ -221,6 +281,11 @@ async function refreshDeviceCliPrompt() {
         if (data.prompt) {
             setCliDirectPrompt(data.prompt);
         }
+        if (data.is_password) {
+            cliIsPasswordMode = true;
+            const input = document.getElementById("cli-input");
+            if (input) input.type = "password";
+        }
     } catch (e) {}
 }
 
@@ -231,13 +296,16 @@ function getCliHostname() {
 }
 
 function getCliPrompt() {
-    if (cliDirectPrompt) return cliDirectPrompt;
+    if (cliDirectPrompt) {
+        const p = cliDirectPrompt.trim();
+        return p.endsWith(" ") ? p : p + " ";
+    }
     const host = getCliHostname();
-    if (cliMode === "user") return `${host}>`;
-    if (cliMode === "config") return `${host}(config)#`;
-    if (cliMode === "config_if") return `${host}(config-if)#`;
-    if (cliMode === "config_router") return `${host}(config-router)#`;
-    return `${host}#`;
+    if (cliMode === "user") return `${host}> `;
+    if (cliMode === "config") return `${host}(config)# `;
+    if (cliMode === "config_if") return `${host}(config-if)# `;
+    if (cliMode === "config_router") return `${host}(config-router)# `;
+    return `${host}# `;
 }
 
 function updatePromptLabel() {
@@ -1646,6 +1714,21 @@ function appendCliLine(text) {
     linesContainer.appendChild(div);
 }
 
+function appendConsole(text, cssClass = "output-line") {
+    if (text === undefined || text === null || text === "") return;
+    const linesContainer = document.getElementById("cli-lines");
+    if (!linesContainer) return;
+    const str = String(text);
+    const lines = str.split("\n");
+    lines.forEach(l => {
+        const div = document.createElement("div");
+        div.className = "cli-line " + (cssClass || "output-line");
+        div.textContent = l;
+        linesContainer.appendChild(div);
+    });
+    scrollToBottom();
+}
+
 function appendCliOutput(text) {
     if (text === undefined || text === null) return;
     const linesContainer = document.getElementById("cli-lines");
@@ -1721,9 +1804,38 @@ function handleCliKey(e) {
     const input = document.getElementById("cli-input");
     if (!input) return;
 
-    if (e.key === "?") {
+    if (e.key === "?" && !cliIsPasswordMode) {
         e.preventDefault();
-        printCiscoHelpInline(input.value);
+        const currentVal = input.value;
+        const prompt = getCliPrompt();
+        appendCliLine(`${prompt}${currentVal}?`);
+        fetch("/api/cli/execute", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                device_id: activeDeviceId,
+                command: `${currentVal}?`
+            })
+        }).then(r => r.json()).then(data => {
+            if (data.output) {
+                appendCliOutput(data.output);
+            } else if (!data.success) {
+                const helpResult = resolveCiscoHelp(currentVal, cliMode);
+                const formatted = formatCiscoHelpTerminal(helpResult);
+                appendCliOutput(formatted);
+            }
+            if (data.prompt) setCliDirectPrompt(data.prompt);
+            input.value = currentVal;
+            scrollToBottom();
+            focusCliInput();
+        }).catch(() => {
+            const helpResult = resolveCiscoHelp(currentVal, cliMode);
+            const formatted = formatCiscoHelpTerminal(helpResult);
+            appendCliOutput(formatted);
+            input.value = currentVal;
+            scrollToBottom();
+            focusCliInput();
+        });
         return;
     }
     if (e.key === "Enter") {
@@ -1731,42 +1843,46 @@ function handleCliKey(e) {
         sendConsoleCmd();
         return;
     }
-    if (e.key === "Tab") {
+    if (e.key === "Tab" && !cliIsPasswordMode) {
         e.preventDefault();
         handleTabAutocomplete();
         return;
     }
     if (e.key === "c" && e.ctrlKey) {
         e.preventDefault();
-        appendCliLine(`${getCliPrompt()}${input.value}^C`);
-        input.value = "";
-        cliMode = "exec";
-        cliContext = [];
-        cliSubmodeLabel = "";
-        updatePromptLabel();
-        scrollToBottom();
+        sendBreakSignal(e);
         return;
     }
     if (e.key === "z" && e.ctrlKey) {
         e.preventDefault();
-        appendCliLine(`${getCliPrompt()}^Z`);
+        const prompt = getCliPrompt();
+        appendCliLine(`${prompt}^Z`);
         input.value = "";
-        cliMode = "exec";
-        cliContext = [];
-        cliSubmodeLabel = "";
-        updatePromptLabel();
-        scrollToBottom();
+        fetch("/api/cli/execute", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                device_id: activeDeviceId,
+                command: "end"
+            })
+        }).then(r => r.json()).then(data => {
+            if (data.output) appendCliOutput(data.output);
+            if (data.prompt) setCliDirectPrompt(data.prompt);
+            scrollToBottom();
+            focusCliInput();
+        }).catch(() => {});
         return;
     }
     if (e.key === "ArrowUp") {
         e.preventDefault();
-        if (cliHistory.length === 0) return;
+        if (cliHistory.length === 0 || cliIsPasswordMode) return;
         cliHistoryIdx = Math.min(cliHistoryIdx + 1, cliHistory.length - 1);
         input.value = cliHistory[cliHistory.length - 1 - cliHistoryIdx] || "";
         return;
     }
     if (e.key === "ArrowDown") {
         e.preventDefault();
+        if (cliIsPasswordMode) return;
         cliHistoryIdx = Math.max(cliHistoryIdx - 1, -1);
         input.value = cliHistoryIdx < 0 ? "" : (cliHistory[cliHistory.length - 1 - cliHistoryIdx] || "");
         return;
@@ -1780,18 +1896,30 @@ async function sendConsoleCmd() {
     const trimmed = rawVal.trim();
     const prompt = getCliPrompt();
 
-    // Echo the command with the current prompt
-    appendCliLine(`${prompt}${rawVal}`);
-    input.value = "";
+    if (cliIsPasswordMode) {
+        // ในโหมด Password: ไม่ echo ตัวอักษรรหัสผ่านลงหน้าจอ (Section 44 ของ spec)
+        appendCliLine(`${prompt}`);
+        input.value = "";
+    } else {
+        // บันทึกคำสั่งลงประวัติ (History)
+        if (trimmed && (cliHistory.length === 0 || cliHistory[cliHistory.length - 1] !== trimmed)) {
+            cliHistory.push(trimmed);
+        }
+        cliHistoryIdx = -1;
+
+        // Echo คำสั่งพร้อม prompt ปัจจุบันบนหน้าจอ (เหมือน Tera Term / PuTTY)
+        appendCliLine(`${prompt}${rawVal}`);
+        input.value = "";
+    }
 
     // Built-in commands & mode navigation
     const lower = trimmed.toLowerCase();
-    if (lower === "clear" || lower === "cls") {
+    if (!cliIsPasswordMode && (lower === "clear" || lower === "cls")) {
         clearConsole();
         return;
     }
 
-    // Send command directly to the live router/switch session!
+    // ส่งคำสั่งไปยังเซสชันจริงของ Router/Switch
     try {
         const res = await fetch("/api/cli/execute", {
             method: "POST",
@@ -1810,6 +1938,15 @@ async function sendConsoleCmd() {
         if (data.prompt) {
             setCliDirectPrompt(data.prompt);
         }
+
+        // จัดการสถานะ Password mode
+        if (data.is_password || (data.prompt && data.prompt.toLowerCase().includes("password:"))) {
+            cliIsPasswordMode = true;
+            input.type = "password";
+        } else {
+            cliIsPasswordMode = false;
+            input.type = "text";
+        }
     } catch (err) {
         appendCliOutput(`% Communication error: ${err.message}`);
     }
@@ -1824,6 +1961,60 @@ function clearConsole(e) {
     if (lines) lines.innerHTML = "";
     const input = document.getElementById("cli-input");
     if (input) input.value = "";
+    if (deviceTerminalState[activeDeviceId]) {
+        deviceTerminalState[activeDeviceId].html = "";
+    }
+    scrollToBottom();
+    focusCliInput();
+}
+
+async function sendBreakSignal(e) {
+    if (e) e.stopPropagation();
+    const prompt = getCliPrompt();
+    const input = document.getElementById("cli-input");
+    const currentVal = input ? input.value : "";
+    if (input) input.value = "";
+
+    appendCliLine(`${prompt}${currentVal}^C`);
+    try {
+        const res = await fetch("/api/cli/execute", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                device_id: activeDeviceId,
+                command: "\x03"
+            })
+        });
+        const data = await res.json();
+        if (data.output) appendCliOutput(data.output);
+        if (data.prompt) setCliDirectPrompt(data.prompt);
+        cliIsPasswordMode = false;
+        if (input) input.type = "text";
+    } catch (err) {}
+    scrollToBottom();
+    focusCliInput();
+}
+
+async function reconnectActiveCli(e) {
+    if (e) e.stopPropagation();
+    appendCliOutput(`[Connecting to ${activeDeviceId} console...]`);
+    try {
+        const res = await fetch("/api/cli/reconnect", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ device_id: activeDeviceId })
+        });
+        const data = await res.json();
+        if (data.success) {
+            appendCliOutput(`[Connected to ${activeDeviceId}]`);
+            if (data.prompt) setCliDirectPrompt(data.prompt);
+        } else {
+            appendCliOutput(`% Reconnect failed: ${data.message}`);
+        }
+        updateCliConnectionBadge();
+    } catch (err) {
+        appendCliOutput(`% Connection error: ${err.message}`);
+    }
     scrollToBottom();
     focusCliInput();
 }
@@ -2041,9 +2232,9 @@ async function importEvengTopology() {
 // TOAST NOTIFICATIONS
 // =============================================================================
 function showNotification(message, type = "info") {
-    // 1. Console log
+    // 1. Browser DevTools console log (never pollute the authentic Cisco CLI terminal screen)
     const prefix = type === "success" ? "[OK]" : type === "error" ? "[ERROR]" : "[INFO]";
-    appendConsole(`${prefix} ${message}`, type === "error" ? "error-line" : "comment");
+    console.log(`${prefix} ${message}`);
 
     // 2. Floating toast UI
     let container = document.getElementById("toast-container");
@@ -2628,4 +2819,14 @@ async function saveConfig() {
         outputEl.textContent = `Error: ${e.message}`;
     }
 }
+
+// Background Keepalive: ป้องกัน Telnet session บน Switch / Router หลุดจาก idle timeout
+setInterval(() => {
+    fetch("/api/connections/keepalive", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ device_id: activeDeviceId })
+    }).catch(() => {});
+}, 45000);
+
 

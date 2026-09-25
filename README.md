@@ -257,6 +257,8 @@ python tests/test_all_features.py
 ---
 
 ## เอกสารอ้างอิงและประวัติรุ่น (Version History & Specs)
+- 📘 **คู่มือการใช้งานฉบับสมบูรณ์ (User Guide)**: [USER_GUIDE.md](USER_GUIDE.md) — คู่มือการใช้งานทุกฟังก์ชันและวิธีตั้งค่า EVE-NG ฉบับละเอียด
 - **v1**: [assignment-2-network-automation-ui-spec.md](assignment-2-network-automation-ui-spec.md) — ข้อกำหนด UI และโครงร่างเริ่มต้น
 - **v2**: [assignment-2-v2-network-automation-ui-spec.md](assignment-2-v2-network-automation-ui-spec.md) — การขยายผลการตั้งค่า Routing และ CLI Normalizer
 - **v3 (Latest)**: [assignment-2-v3-network-automation-ui-spec.md](assignment-2-v3-network-automation-ui-spec.md) — สถาปัตยกรรมปฏิบัติการจริง, MultiGraph Auto-Discovery, Auto-Reconnect, DHCP Client Mode และชุดทดสอบ 28 รายการ
+

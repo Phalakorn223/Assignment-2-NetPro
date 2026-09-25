@@ -1,88 +1,104 @@
 {
   "nodes": [
     {
-      "id": "R1",
-      "name": "R1",
-      "type": "router",
-      "ip": "192.168.74.133",
-      "model": "L3-ADVENTERPRISEK9-M-15.4-2T.bin",
-      "status": "connected"
-    },
-    {
       "id": "R2",
       "name": "R2",
       "type": "router",
-      "ip": "192.168.74.131",
-      "model": "L3-ADVENTERPRISEK9-M-15.4-2T.bin",
-      "status": "discovered"
+      "ip": "192.168.80.137",
+      "model": "",
+      "status": "connected"
     },
     {
-      "id": "R3",
-      "name": "R3",
+      "id": "SW1",
+      "name": "SW1",
+      "type": "switch",
+      "ip": "192.168.80.140",
+      "model": "",
+      "status": "connected"
+    },
+    {
+      "id": "R1",
+      "name": "R1",
       "type": "router",
-      "ip": "192.168.74.131",
-      "model": "L3-ADVENTERPRISEK9-M-15.4-2T.bin",
-      "status": "discovered"
+      "ip": "192.168.80.138",
+      "model": "",
+      "status": "connected"
     },
     {
-      "id": "Net",
-      "name": "Net",
+      "id": "R4",
+      "name": "R4",
+      "type": "router",
+      "ip": "192.168.80.134",
+      "model": "",
+      "status": "connected"
+    },
+    {
+      "id": "SW2",
+      "name": "SW2",
+      "type": "switch",
+      "ip": "192.168.80.141",
+      "model": "",
+      "status": "connected"
+    },
+    {
+      "id": "Net_192_168_80_0_24",
+      "name": "Net 192.168.80.0/24",
       "type": "network",
-      "ip": "192.168.74.0/24",
+      "ip": "192.168.80.0/24",
       "model": "cloud",
       "status": "discovered"
     }
   ],
   "edges": [
     {
-      "from": "R1",
-      "to": "Net",
-      "from_port": "Ethernet0/0",
-      "to_port": "",
-      "status": "up",
-      "method": "eveng",
-      "from_ip": "192.168.74.133"
-    },
-    {
-      "from": "R1",
-      "to": "R2",
-      "from_port": "Ethernet0/1",
-      "to_port": "Ethernet0/1",
-      "status": "up",
-      "method": "eveng",
-      "from_ip": "192.168.75.1"
-    },
-    {
-      "from": "R1",
-      "to": "R3",
-      "from_port": "Ethernet0/3",
-      "to_port": "Ethernet0/3",
-      "status": "up",
-      "method": "eveng"
-    },
-    {
       "from": "R2",
-      "to": "Net",
+      "to": "Net_192_168_80_0_24",
       "from_port": "Ethernet0/0",
       "to_port": "",
       "status": "up",
-      "method": "eveng"
+      "method": "subnet_match",
+      "from_ip": "192.168.80.137",
+      "subnet": "192.168.80.0/24"
     },
     {
-      "from": "R2",
-      "to": "R3",
-      "from_port": "Ethernet0/2",
-      "to_port": "Ethernet0/2",
+      "from": "SW1",
+      "to": "Net_192_168_80_0_24",
+      "from_port": "Vlan1",
+      "to_port": "",
       "status": "up",
-      "method": "eveng"
+      "method": "subnet_match",
+      "from_ip": "192.168.80.140",
+      "subnet": "192.168.80.0/24"
     },
     {
-      "from": "R3",
-      "to": "Net",
+      "from": "R1",
+      "to": "Net_192_168_80_0_24",
       "from_port": "Ethernet0/0",
       "to_port": "",
       "status": "up",
-      "method": "eveng"
+      "method": "subnet_match",
+      "from_ip": "192.168.80.138",
+      "subnet": "192.168.80.0/24"
+    },
+    {
+      "from": "R4",
+      "to": "Net_192_168_80_0_24",
+      "from_port": "Ethernet0/0",
+      "to_port": "",
+      "status": "up",
+      "method": "subnet_match",
+      "from_ip": "192.168.80.134",
+      "subnet": "192.168.80.0/24"
+    },
+    {
+      "from": "SW2",
+      "to": "Net_192_168_80_0_24",
+      "from_port": "Vlan1",
+      "to_port": "",
+      "status": "up",
+      "method": "subnet_match",
+      "from_ip": "192.168.80.141",
+      "subnet": "192.168.80.0/24"
     }
   ]
 }

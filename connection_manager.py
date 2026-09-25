@@ -240,7 +240,8 @@ class ConnectionManager:
                     "device_type": "cisco_ios_telnet",
                     "ip": ip,
                     "port": port,
-                    "conn_timeout": 12,
+                    "conn_timeout": 15,
+                    "fast_cli": False,
                 }
                 if username:
                     params["username"] = username
@@ -256,16 +257,30 @@ class ConnectionManager:
                     conn.enable()
                 except Exception:
                     enable_ok = False
+
+                # ปิด pagination และขยาย width ป้องกันปัญหา line wrapping บน Switch
                 try:
-                    conn.send_command("terminal length 0")
+                    conn.send_command("terminal length 0", read_timeout=6)
                 except Exception:
-                    pass
+                    try:
+                        conn.write_channel("terminal length 0\r\n")
+                    except Exception:
+                        pass
+
+                try:
+                    conn.send_command("terminal width 512", read_timeout=6)
+                except Exception:
+                    try:
+                        conn.write_channel("terminal width 512\r\n")
+                    except Exception:
+                        pass
+
                 self.pool[device_id] = {"handler": conn, "type": "TELNET", "params": dict(device_params)}
                 if not enable_ok:
                     return {
                         "success": True,
                         "warning": True,
-                        "message": f"Telnet เชื่อมต่อ {ip}:{port} สำเร็จ (User Mode: >) แต่ Router ไม่สามารถเข้า Enable Mode (#) ได้ — บน Router จำเป็นต้องมีคำสั่ง 'enable secret <รหัส>' เพื่อให้สามารถแก้ไขคอนฟิกผ่าน Telnet ได้"
+                        "message": f"Telnet เชื่อมต่อ {ip}:{port} สำเร็จ (User Mode: >) แต่ Router/Switch ไม่สามารถเข้า Enable Mode (#) ได้ — จำเป็นต้องมีคำสั่ง 'enable secret <รหัส>' เพื่อให้สามารถแก้ไขคอนฟิกผ่าน Telnet ได้"
                     }
                 return {"success": True, "message": f"Telnet เชื่อมต่อ {ip}:{port} สำเร็จ"}
 
@@ -306,8 +321,8 @@ class ConnectionManager:
             return {"success": False, "message": f"เชื่อมต่อล้มเหลว: {str(e)}"}
 
     def _ensure_connection(self, device_id: str) -> bool:
-        """ตรวจและเชื่อมต่ออัตโนมัติถ้า session หลุดหรือยังไม่ได้ connect"""
-        if self.is_connected(device_id):
+        """ตรวจและเชื่อมต่ออัตโนมัติถ้า session หลุดหรือยังไม่ได้ connect (พร้อม Liveness Probe)"""
+        if self.is_connected(device_id, check_alive=True):
             return True
         dev = get_device_by_id(device_id)
         if dev and (dev.get("device_type_label") or "").lower() not in ("pc", "network"):
@@ -319,14 +334,14 @@ class ConnectionManager:
 
     def send_command(self, device_id: str, command: str, use_textfsm: bool = False, retry: bool = True) -> dict:
         """
-        ส่ง show command ไปยัง device
+        ส่ง show command ไปยัง device ดึงข้อมูลจริง 100%
         use_textfsm=True เพื่อ parse output เป็น structured data (สำหรับ CDP/LLDP)
         มี auto-reconnect ถ้า session หลุด
         """
         dev = get_device_by_id(device_id)
         target_id = dev.get("id", device_id) if dev else device_id
 
-        if not self.is_connected(target_id) and not self.is_connected(device_id):
+        if not self.is_connected(target_id, check_alive=True) and not self.is_connected(device_id, check_alive=True):
             if not self._ensure_connection(target_id):
                 return {"success": False, "output": f"Device '{device_id}' ยังไม่ได้เชื่อมต่อ"}
 
@@ -378,16 +393,17 @@ class ConnectionManager:
 
         return {"success": False, "output": "Unknown connection type"}
 
-    def send_interactive(self, device_id: str, command: str) -> dict:
+    def send_interactive(self, device_id: str, command: str, retry: bool = True) -> dict:
         """
         ส่งคำสั่งแบบ Interactive Terminal โดยตรงไปยังอุปกรณ์ (รักษา session state ต่อเนื่อง)
         ดึง prompt และ output จริงจาก Router / Switch โดยตรง
+        มีระบบ Auto-reconnect ป้องกัน Telnet session หลุดกับ Switch
         คืน {"success": True, "output": output, "prompt": prompt}
         """
         dev = get_device_by_id(device_id)
         target_id = dev.get("id", device_id) if dev else device_id
 
-        if not self.is_connected(target_id) and not self.is_connected(device_id):
+        if not self.is_connected(target_id, check_alive=True) and not self.is_connected(device_id, check_alive=True):
             if not self._ensure_connection(target_id):
                 return {"success": False, "output": f"Device '{device_id}' ยังไม่ได้เชื่อมต่อ", "prompt": ""}
 
@@ -398,36 +414,71 @@ class ConnectionManager:
 
         try:
             cmd_str = (command or "").strip()
-            # ส่งคำสั่งพร้อม \r\n หรือถ้าเป็นคำสั่งว่างส่ง \r\n เพื่อรีเฟรช prompt
-            cmd_to_send = f"{cmd_str}\r\n" if cmd_str else "\r\n"
 
             if conn_type in ("SSH", "TELNET"):
-                handler.write_channel(cmd_to_send)
-                # อ่าน output จาก channel
-                raw = handler.read_channel_timing(last_read=0.5, read_timeout=8.0)
+                # ล้าง buffer ตกค้างก่อนส่งคำสั่ง เพื่อไม่ให้ข้อมูลเก่าปนกับคำสั่งใหม่
+                try:
+                    handler.clear_buffer()
+                except Exception:
+                    pass
+
+                # รองรับ Ctrl+C (Break/Interrupt signal)
+                if command in ("\x03", "^C"):
+                    handler.write_channel("\x03")
+                    raw = handler.read_channel_timing(last_read=0.5, read_timeout=2.0)
+                elif not cmd_str:
+                    # ถ้าส่งว่างเพื่อดึง prompt สดจากอุปกรณ์
+                    handler.write_channel("\r\n")
+                    raw = handler.read_channel_timing(last_read=1.0, read_timeout=4.0)
+                else:
+                    # ส่งคำสั่งจริงไปยัง Channel
+                    handler.write_channel(f"{cmd_str}\r\n")
+                    raw = handler.read_channel_timing(last_read=1.5, read_timeout=20.0)
+
+                # จัดการ Paging กรณีอุปกรณ์ส่ง output ยาวและติด --More-- (ตาม Section 14 & 24 ของ network_cli_teraterm_putty_vibecoding.md)
+                max_pages = 30
+                pages = 0
+                while "--More--" in raw and pages < max_pages:
+                    handler.write_channel(" ")
+                    time.sleep(0.08)
+                    more_data = handler.read_channel_timing(last_read=0.8, read_timeout=4.0)
+                    if not more_data:
+                        break
+                    raw += more_data
+                    pages += 1
+
             elif conn_type == "SERIAL":
                 ser = handler
                 ser.reset_input_buffer()
-                ser.write(cmd_to_send.encode("utf-8"))
+                if command in ("\x03", "^C"):
+                    ser.write(b"\x03")
+                else:
+                    cmd_to_send = f"{cmd_str}\r\n" if cmd_str else "\r\n"
+                    ser.write(cmd_to_send.encode("utf-8"))
 
                 start_time = time.time()
                 raw_bytes = bytearray()
-                timeout = 4.0
+                timeout = 5.0
                 while time.time() - start_time < timeout:
                     if ser.in_waiting > 0:
                         chunk = ser.read(ser.in_waiting)
                         raw_bytes.extend(chunk)
                         decoded = raw_bytes.decode("utf-8", errors="ignore")
                         lines = [l.strip() for l in decoded.splitlines() if l.strip()]
-                        if len(lines) >= 1 and re.search(r"^[A-Za-z0-9_\-\.\(\)]+[#>]\s*$", lines[-1]):
+                        if len(lines) >= 1 and (
+                            re.search(r"^[A-Za-z0-9_\-\.\(\)]+[#>]\s*$", lines[-1])
+                            or re.search(r"^[Pp]assword:\s*$", lines[-1])
+                        ):
                             break
                     time.sleep(0.05)
                 raw = raw_bytes.decode("utf-8", errors="ignore")
             else:
-                return {"success": False, "output": "Unknown connection type", "prompt": ""}
+                return {"success": False, "output": "Unknown connection type", "prompt": "", "is_password": False}
 
-            # Normalize line endings
-            raw_clean = raw.replace("\r\r\n", "\n").replace("\r\n", "\n").replace("\r", "\n")
+            # ลบ ANSI Escape Codes, Pager markers (--More--), และ backspaces
+            raw_no_more = re.sub(r'--More--|\x08+', '', raw)
+            raw_no_ansi = re.sub(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])', '', raw_no_more)
+            raw_clean = raw_no_ansi.replace("\r\r\n", "\n").replace("\r\n", "\n").replace("\r", "\n")
             lines = raw_clean.split("\n")
 
             # ตัด echo ของ command ถ้ามีที่บรรทัดแรก
@@ -438,24 +489,42 @@ class ConnectionManager:
             while lines and not lines[-1].strip():
                 lines.pop()
 
-            # สกัด prompt ตัวจริงของ Cisco ออกมาจากบรรทัดสุดท้าย (เช่น S1#, S1(config)#, S1(config-line)#, Router2>)
+            # สกัด prompt ตัวจริงของ Cisco ออกมาจากบรรทัดสุดท้าย (Section 16-19, 40-41)
             prompt = ""
-            if lines and re.search(r"^[A-Za-z0-9_\-\.\(\)]+[#>]\s*$", lines[-1].strip()):
-                prompt = lines.pop().strip()
+            is_password = False
+            if lines:
+                last_line = lines[-1].strip()
+                # 1. ตรวจจับ Password prompt (เช่น Password:, password:)
+                if re.search(r"^[Pp]assword:\s*$", last_line):
+                    prompt = lines.pop().strip()
+                    is_password = True
+                # 2. ตรวจจับ Cisco CLI Prompt ปกติ (เช่น R1#, R1>, R1(config)#, S1(config-if)#, Switch#)
+                elif re.search(r"^[A-Za-z0-9_\-\.\(\)]+[#>]\s*$", last_line):
+                    prompt = lines.pop().strip()
+                # 3. ตรวจจับ Interactive confirmation prompt ([confirm], [yes/no]:)
+                elif re.search(r"\[confirm\]|\[yes/no\]:\s*$", last_line, re.I):
+                    prompt = lines.pop().strip()
 
             clean_output = "\n".join(lines).strip()
             return {
                 "success": True,
                 "output": clean_output,
                 "prompt": prompt,
+                "is_password": is_password,
                 "raw": raw
             }
 
         except Exception as e:
-            err_msg = str(e)
-            if "PermissionError" in err_msg or "Access is denied" in err_msg:
+            err_msg = str(e).lower()
+            if retry and any(term in err_msg for term in ("closed", "eof", "broken pipe", "connection reset", "socket", "timeout")):
+                print(f"[ConnectionManager] Interactive connection dropped for {active_id} ({e}), reconnecting...")
+                self.disconnect(active_id)
+                if self._ensure_connection(active_id):
+                    return self.send_interactive(active_id, command, retry=False)
+
+            if "PermissionError" in str(e) or "Access is denied" in str(e):
                 return {"success": False, "output": "พอร์ต Serial ถูกเปิดใช้งานโดยโปรแกรมอื่น (เช่น Tera Term) — กรุณาปิดโปรแกรมอื่นก่อน", "prompt": ""}
-            return {"success": False, "output": f"Error: {err_msg}", "prompt": ""}
+            return {"success": False, "output": f"Error: {str(e)}", "prompt": ""}
 
     def send_config(self, device_id: str, commands: list, retry: bool = True) -> dict:
         """
@@ -562,14 +631,52 @@ class ConnectionManager:
         for device_id in list(self.pool.keys()):
             self.disconnect(device_id)
 
-    def is_connected(self, device_id: str) -> bool:
+    def is_connected(self, device_id: str, check_alive: bool = False) -> bool:
+        """ตรวจสอบว่า device เชื่อมต่ออยู่หรือไม่ พร้อมออปชัน check_alive ตรวจสุขภาพ socket จริง"""
+        entry_key = None
         if device_id in self.pool:
-            return True
-        for k, v in self.pool.items():
-            params = v.get("params", {})
-            if k == device_id or params.get("id") == device_id or params.get("name") == device_id:
-                return True
-        return False
+            entry_key = device_id
+        else:
+            for k, v in self.pool.items():
+                params = v.get("params", {})
+                if k == device_id or params.get("id") == device_id or params.get("name") == device_id:
+                    entry_key = k
+                    break
+
+        if not entry_key:
+            return False
+
+        if check_alive:
+            entry = self.pool[entry_key]
+            handler = entry.get("handler")
+            conn_type = entry.get("type")
+            if conn_type in ("SSH", "TELNET") and hasattr(handler, "is_alive"):
+                try:
+                    alive = handler.is_alive()
+                    if not alive:
+                        print(f"[ConnectionManager] Socket dead for {entry_key}, removing from pool...")
+                        self.disconnect(entry_key)
+                        return False
+                except Exception:
+                    self.disconnect(entry_key)
+                    return False
+        return True
+
+    def send_keepalive(self, device_id: str = None):
+        """ส่ง Telnet NOP หรือ SSH keepalive เพื่อป้องกัน Switch ปิดการเชื่อมต่อเนื่องจาก idle"""
+        targets = [device_id] if device_id else list(self.pool.keys())
+        for tid in targets:
+            if tid in self.pool:
+                entry = self.pool[tid]
+                handler = entry.get("handler")
+                if entry.get("type") in ("SSH", "TELNET") and hasattr(handler, "is_alive"):
+                    try:
+                        if not handler.is_alive():
+                            self.disconnect(tid)
+                            self._ensure_connection(tid)
+                    except Exception:
+                        self.disconnect(tid)
+                        self._ensure_connection(tid)
 
     def get_connected_devices(self) -> list:
         return [{"id": k, "type": v["type"]} for k, v in self.pool.items()]

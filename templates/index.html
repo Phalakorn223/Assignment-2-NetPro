@@ -16,7 +16,7 @@
     <!-- vis-network for interactive topology (Bonus) -->
     <script src="https://unpkg.com/vis-network@9.1.2/dist/vis-network.min.js"></script>
     <link rel="stylesheet" href="https://unpkg.com/vis-network@9.1.2/dist/dist/vis-network.min.css">
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}?v=3.3">
 </head>
 
 <body>
@@ -474,8 +474,11 @@
                                     <span class="cisco-win-dot min"></span>
                                     <span class="cisco-win-dot max"></span>
                                     <span class="cisco-titlebar-text" id="cli-window-title"><i class="fa-solid fa-terminal"></i> Console - R1</span>
+                                    <span class="badge badge-success" id="cli-conn-badge" style="margin-left:8px;font-size:11px;padding:2px 8px;border-radius:4px;letter-spacing:0.5px;">LIVE</span>
                                 </div>
                                 <div class="cisco-titlebar-actions">
+                                    <button type="button" class="cisco-btn-titlebar" onclick="sendBreakSignal(event)" title="Send Break / Ctrl+C to device"><i class="fa-solid fa-ban"></i> Ctrl+C</button>
+                                    <button type="button" class="cisco-btn-titlebar" onclick="reconnectActiveCli(event)" title="Reconnect Session"><i class="fa-solid fa-rotate-right"></i> Reconnect</button>
                                     <button type="button" class="cisco-btn-titlebar" onclick="clearConsole(event)" title="Clear screen"><i class="fa-solid fa-eraser"></i> Clear</button>
                                     <button type="button" class="cisco-btn-titlebar" onclick="copyConsoleOutput(event)" title="Copy terminal text"><i class="fa-regular fa-copy"></i> Copy</button>
                                 </div>
@@ -939,7 +942,7 @@ router ospf 1
         </div>
     </div>
 
-    <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/app.js') }}?v=3.3"></script>
 </body>
 
 </html>
