@@ -455,6 +455,24 @@ def test_interface_dhcp_config():
         return True, "Generated 'ip address dhcp' successfully"
     return False, f"Unexpected commands: {cmds}"
 
+# 28. Interface No IP Address Configuration
+def test_interface_no_ip_config():
+    payload = {
+        "device_id": "R1",
+        "interface": "Ethernet0/3",
+        "ip": "no ip address",
+        "mask": "",
+        "state": "down",
+        "description": "No-IP-Test-Port"
+    }
+    r = requests.post(f"{BASE}/config/interface", json=payload)
+    if r.status_code != 200:
+        return False, f"Status {r.status_code}: {r.text}"
+    cmds = r.json().get("commands", [])
+    if any("no ip address" in c for c in cmds):
+        return True, "Generated 'no ip address' successfully"
+    return False, f"Unexpected commands: {cmds}"
+
 # Run all tests
 test("1. Inventory List", test_inventory)
 test("2. Add/Remove Inventory", test_add_remove_inventory)
@@ -483,6 +501,7 @@ test("24. Routing Redistribution Preview", test_routing_redistribute_config)
 test("25. Topology Interfaces Diagnostics", test_topology_diagnostics)
 test("26. EVE-NG Direct Import", test_eveng_import)
 test("27. Interface DHCP Configuration", test_interface_dhcp_config)
+test("28. Interface No IP Configuration", test_interface_no_ip_config)
 
 print("\n" + "="*50)
 print(f"RESULTS: {passed} PASSED, {failed} FAILED out of {passed+failed} tests")

@@ -1,7 +1,7 @@
 # Spec v3 — NetConfig Tracer Studio: Real-Lab Integration, Auto-Discovery & Resilient Architecture
 
 > เอกสารนี้เป็น **ส่วนขยายระดับปฏิบัติการจริง (Operational & Production Spec)** ต่อเนื่องจาก `assignment-2-network-automation-ui-spec.md` (v1) และ `assignment-2-v2-network-automation-ui-spec.md` (v2)
-> รวบรวมสถาปัตยกรรมที่พัฒนาขึ้นจริง, ปัญหาทางเทคนิคระดับลึกที่ตรวจพบจากการทดสอบกับ Cisco IOS บน EVE-NG, การแก้ไขบั๊กทั้งหมด, และผลลัพธ์ของชุดทดสอบ 27 ฟังก์ชัน (100% Pass)
+> รวบรวมสถาปัตยกรรมที่พัฒนาขึ้นจริง, ปัญหาทางเทคนิคระดับลึกที่ตรวจพบจากการทดสอบกับ Cisco IOS บน EVE-NG, การแก้ไขบั๊กทั้งหมด, และผลลัพธ์ของชุดทดสอบ 28 ฟังก์ชัน (100% Pass)
 > ให้ใช้ไฟล์ v3 นี้เป็น **เกณฑ์อ้างอิงล่าสุด (Source of Truth)** ของระบบ
 
 ---
@@ -13,7 +13,7 @@
 4. [การบูรณาการ EVE-NG REST API เต็มรูปแบบ](#4-การบูรณาการ-eve-ng-rest-api-เต็มรูปแบบ)
 5. [Interface Configuration Lifecycle & Live Cache Sync](#5-interface-configuration-lifecycle--live-cache-sync)
 6. [การปรับปรุง Vis.js Topology UI & Dark Aesthetics](#6-การปรับปรุง-visjs-topology-ui--dark-aesthetics)
-7. [ชุดทดสอบระบบ 27 ฟังก์ชัน (Test Suite Specification)](#7-ชุดทดสอบระบบ-27-ฟังก์ชัน-test-suite-specification)
+7. [ชุดทดสอบระบบ 28 ฟังก์ชัน (Test Suite Specification)](#7-ชุดทดสอบระบบ-28-ฟังก์ชัน-test-suite-specification)
 8. [โครงสร้างไฟล์และไดเรกทอรีมาตรฐาน (Project Organization)](#8-โครงสร้างไฟล์และไดเรกทอรีมาตรฐาน-project-organization)
 
 ---
@@ -150,38 +150,44 @@ NetworkX เมื่อแปลงเป็น Edge มักสลับท�
 
 ## 5. Interface Configuration Lifecycle & Live Cache Sync
 
-### 5.1 ปัญหา Interface หายไป ("No interface data available")
+### 5.1 ปัญหา Interface หายไปและระบบ Auto-Refresh อัตโนมัติ
 - ผู้ใช้เปลี่ยน Router ใน Dropdown หน้า Interface แต่ตารางไม่ยอมเปลี่ยนตาม
 - เมื่อกด **"Deploy Interface Config"** สำเร็จ หน้าจอไม่ยอมรีเฟรชค่าใหม่
 - **v3 Fix ใน `app.js` & `app.py`**:
-  1. `onActiveDeviceChange()`: เรียก `refreshInterfaceTable()` ทันทีเมื่อผู้ใช้เปลี่ยน Target Device
+  1. **Instant Auto-Refresh on Target Switch**: เมื่อเปลี่ยนอุปกรณ์ที่ Dropdown, คลิก Node บน Topology Canvas, หรือคลิกอุปกรณ์จากแถบ Inventory ระบบจะเรียก `selectActiveDevice(deviceId, true)` สั่งดึงค่า Interface สดจาก Router ทันที (`force=1`), พร้อมเติมค่า Interface ขาแรกลงในฟอร์ม Step 2 อัตโนมัติ
   2. `submitInterfaceConfig()`:
      - ปรับปุ่มเป็นสถานะกำลังส่งคำสั่ง (`Deploying...` + Spinner)
      - เมื่อได้รับคำตอบสำเร็จ สั่ง `await refreshInterfaceTable(true)` (ส่ง `?force=1` ดึงค่าสดจาก Router) ทันที
      - สั่ง `runAutoDiscovery()` ให้เส้นใน Topology ปรับเปลี่ยนตามทันทีโดยไม่ต้องรีโหลดหน้าเว็บ
   3. ปุ่ม **Refresh** ในตาราง Step 1: ผูกกับ `refreshInterfaceTable(true)` เพื่อให้ผู้ใช้สามารถบังคับดึงข้อมูลสดจาก Router ได้ทุกเวลา
 
-### 5.2 การรองรับโหมด DHCP Client (`ip address dhcp`)
-- ใน Cisco IOS ขา Interface สามารถรับ IP อัตโนมัติจาก DHCP Server ผ่านคำสั่ง `ip address dhcp` (โดยไม่ต้องระบุ Subnet Mask)
+### 5.2 การรองรับโหมด Tri-Mode IP Configuration (Static, DHCP, No IP)
+ใน Cisco IOS ขา Interface สามารถกำหนด IP ได้ 3 รูปแบบหลัก ซึ่ง v3 รองรับครบวงจร:
+
+1. **Static IP**: ระบุ IPv4 และ Subnet Mask แบบดั้งเดิม
+2. **DHCP Client (`ip address dhcp`)**: ให้ Interface ขอรับ IP อัตโนมัติจาก DHCP Server
+3. **No IP (`no ip address` / `no ip add`)**: ลบ/ถอน IP Address ออกจากขา Interface และคืนสถานะเป็น `unassigned`
+
 - **v3 Implementation & UI UX**:
-  - **IP Configuration Mode Toggle**: มีปุ่มสลับโหมดระหว่าง **Static IP** และ **DHCP Client** พร้อมตัวเลือก visual feedback ชัดเจน
+  - **Tri-Mode Radio Selector**: มีปุ่มสลับ 3 โหมด: **Static IP**, **DHCP Client**, และ **No IP (no ip add)**
   - **Smart Form Adaptation**:
-    - เมื่อสลับเป็น DHCP: ช่อง IP Address ถูกกำหนดเป็น `DHCP` (ตัวอักษรสีฟ้าสว่าง `#38bdf8` เด่นชัด) และช่อง Subnet Mask จะถูกปิดการใช้งานอัตโนมัติ (Disabled & Grayed out)
-    - เมื่อผู้ใช้พิมพ์คำว่า `dhcp` หรือ `DHCP` ลงในช่อง IP ด้วยตนเอง ระบบจะสลับโหมดและปิดช่อง Subnet Mask ให้อัตโนมัติทันที
-    - เมื่อคลิกเลือกแถว Interface ในตาราง Step 1 หากขา Interface นั้นมีค่า IP เป็น DHCP ระบบจะตรวจจับและสลับโหมดมาเป็น DHCP Client ให้อัตโนมัติ
+    - เมื่อเลือก **DHCP Client**: ช่อง IP Address กลายเป็น `DHCP` (สีฟ้า `#38bdf8`) และ Subnet Mask ถูกปิดใช้งาน
+    - เมื่อเลือก **No IP**: ช่อง IP Address กลายเป็น `no ip address` (ตัวอักษรสีแดง/ส้มจาง `#f87171`) และ Subnet Mask ถูกปิดใช้งาน
+    - เมื่อผู้ใช้พิมพ์คำว่า `no`, `no ip`, `no ip add`, `no ip address`, `none`, หรือ `unassigned` ลงในช่อง IP เอง ระบบจะตรวจจับและสลับเข้าสู่โหมด No IP ให้อัตโนมัติทันที
+    - เมื่อคลิกเลือกแถว Interface ในตาราง Step 1 หากขานั้นเป็น `unassigned` ระบบจะตั้งเป็นโหมด No IP ให้โดยตรง
   - **Cisco IOS Command Generation (`command_builder.py`)**:
-    - เมื่อ `ip.lower().strip() == 'dhcp'` จะสร้างคำสั่ง:
+    - เมื่อตรวจจับโหมด No IP ระบบจะสร้างคำสั่ง:
       ```cisco
       interface <name>
        description <desc>
-       ip address dhcp
+       no ip address
        no shutdown
       ```
-    - ไม่มีการใส่ Subnet Mask ต่อท้าย ซึ่งถูกต้องตาม Cisco IOS Reference Architecture
+    - ไม่มีการใส่ Subnet Mask ต่อท้าย ซึ่งสอดคล้องกับ Cisco IOS Syntax
   - **Backend Validation Bypass (`app.py`)**:
-    - ตรวจจับค่า `ip == 'dhcp'` แล้วข้าม Regex Validation ของ IPv4 Address โดยตรง ทำให้ไม่เกิด 400 Bad Request
+    - ตรวจจับค่า `dhcp` และคำค้น No IP (`no ip address`, `no ip add`, `none`, `unassigned`) ข้าม Regex Validation ไม่ติด Error 400 Bad Request
   - **Verification**:
-    - ผ่านการทดสอบโดยอัตโนมัติในชุดทดสอบ Test #27 (`Interface DHCP Configuration`) ครบถ้วน 100%
+    - ผ่านการทดสอบโดยอัตโนมัติในชุดทดสอบ Test #27 (`Interface DHCP Configuration`) และ Test #28 (`Interface No IP Configuration`) ครบถ้วน 100%
 
 ---
 
@@ -198,39 +204,40 @@ NetworkX เมื่อแปลงเป็น Edge มักสลับท�
 
 ---
 
-## 7. ชุดทดสอบระบบ 27 ฟังก์ชัน (Test Suite Specification)
+## 7. ชุดทดสอบระบบ 28 ฟังก์ชัน (Test Suite Specification)
 
-ระบบมาพร้อมชุดทดสอบอัตโนมัติแบบ End-to-End ในไฟล์ [tests/test_all_features.py](file:///c:/Users/puvad/Documents/RepoGithub/Assignment-2-NetPro/tests/test_all_features.py) ซึ่งผ่านการทดสอบจริงครบถ้วน **27/27 Tests Passed (100%)**:
+ระบบมาพร้อมชุดทดสอบอัตโนมัติแบบ End-to-End ในไฟล์ [tests/test_all_features.py](file:///c:/Users/puvad/Documents/RepoGithub/Assignment-2-NetPro/tests/test_all_features.py) ซึ่งผ่านการทดสอบจริงครบถ้วน **28/28 Tests Passed (100%)**:
 
 | # | ชื่อการทดสอบ | Endpoint / Function | สิ่งที่ตรวจสอบ | ผลลัพธ์ |
 |---|---|---|---|:---:|
-| 1 | Inventory List | `GET /api/inventory` | ดึงรายชื่อ R1, R2, R3 ครบถ้วน | **PASS** |
-| 2 | Add/Remove Inventory | `POST/DELETE /api/inventory` | เพิ่มและลบ Switch ทดสอบ | **PASS** |
-| 3 | Connect Devices | `POST /api/connect/<id>` | เชื่อมต่อ Telnet R1, R2, R3 บน EVE-NG | **PASS** |
+| 1 | Device Inventory (List) | `GET /api/inventory` | ดึงรายชื่อ R1, R2, R3 ครบถ้วน | **PASS** |
+| 2 | Device Inventory (Add/Remove) | `POST/DELETE /api/inventory` | เพิ่มและลบ Switch ทดสอบ | **PASS** |
+| 3 | Device Connection (R1, R2, R3) | `POST /api/connect/<id>` | เชื่อมต่อ Telnet R1, R2, R3 บน EVE-NG | **PASS** |
 | 4 | Active Connections Pool | `GET /api/connections` | ตรวจสอบ Session Pool ของทั้ง 3 เครื่อง | **PASS** |
-| 5 | Interfaces List | `GET /api/devices/<id>/interfaces` | ดึงและ Parse `show ip int brief` | **PASS** |
-| 6 | Interface Configure | `POST /api/devices/<id>/interfaces/configure` | ตั้งค่าสถานะ Up/Down บนขา Router จริง | **PASS** |
-| 7 | Routing Preview: Static | `POST /api/routing/preview` | ตรวจสอบคำสั่ง `ip route ...` | **PASS** |
-| 8 | Routing Preview: OSPF | `POST /api/routing/preview` | ตรวจสอบ `router ospf`, `network ... area` | **PASS** |
-| 9 | Routing Preview: RIP | `POST /api/routing/preview` | ตรวจสอบ RIP v2 และ `no auto-summary` | **PASS** |
-| 10 | Routing Preview: EIGRP | `POST /api/routing/preview` | ตรวจสอบ `router eigrp <as>`, wildcard | **PASS** |
-| 11 | Routing Preview: BGP | `POST /api/routing/preview` | ตรวจสอบ `neighbor ... remote-as`, `network` | **PASS** |
-| 12 | Routing Apply (Live Config) | `POST /api/routing/apply` | Push Route ไปยัง R1 จริงและ Rollback | **PASS** |
-| 13 | Show Command Execution | `POST /api/show` | รัน `show ip route` รับ Output จริง | **PASS** |
-| 14 | CLI Freeform Execution | `POST /api/cli/execute` | รัน `show clock` ผ่าน Virtual Terminal | **PASS** |
-| 15 | Topology Auto-Discovery | `GET /api/topology/json` | ตรวจพบ Node และสายเชื่อมต่อ R1-R2 จริง | **PASS** |
-| 16 | Front Panel Ports | `GET /api/ports/<id>` | แสดงสถานะไฟ LED และข้อมูลพอร์ต | **PASS** |
-| 17 | Command Suggestions | `GET /api/suggestions?q=sh+ip` | แนะนำคำสั่ง Autocomplete อัตโนมัติ | **PASS** |
-| 18 | Command Normalization | `POST /api/cli/execute` | แปลง `sh ip int br` -> คำสั่งเต็ม | **PASS** |
-| 19 | Virtual PC Config | `POST /api/pc/<id>/config` | บันทึก IP, Mask, Gateway ของ PC | **PASS** |
-| 20 | Virtual PC Ping via Proxy | `POST /api/pc/<id>/ping` | ยิง Ping จำลองผ่าน Default Gateway Router | **PASS** |
-| 21 | Ping Endpoint | `POST /api/ping` | ตรวจสอบการตอบสนอง ICMP | **PASS** |
-| 22 | Interface State Toggle | `POST /api/config/interface/state` | สั่ง Up/Down แยกอิสระพร้อม Verify | **PASS** |
-| 23 | Direct Interface Config | `POST /api/config/interface` | ตั้งค่า IP และ Description ผ่าน Endpoint หลัก | **PASS** |
+| 5 | Interfaces List (Parsing & Schema) | `GET /api/devices/<id>/interfaces` | ดึงและ Parse `show ip int brief` | **PASS** |
+| 6 | Interface Configure (Live Set Status) | `POST /api/devices/<id>/interfaces/configure` | ตั้งค่าสถานะ Up/Down บนขา Router จริง | **PASS** |
+| 7 | Routing Preview (Static Route) | `POST /api/routing/preview` | ตรวจสอบคำสั่ง `ip route ...` | **PASS** |
+| 8 | Routing Preview (OSPF) | `POST /api/routing/preview` | ตรวจสอบ `router ospf`, `network ... area` | **PASS** |
+| 9 | Routing Preview (RIP) | `POST /api/routing/preview` | ตรวจสอบ RIP v2 และ `no auto-summary` | **PASS** |
+| 10 | Routing Preview (EIGRP) | `POST /api/routing/preview` | ตรวจสอบ `router eigrp <as>`, wildcard | **PASS** |
+| 11 | Routing Preview (BGP) | `POST /api/routing/preview` | ตรวจสอบ `neighbor ... remote-as`, `network` | **PASS** |
+| 12 | Routing Apply (Live Push & Revert) | `POST /api/routing/apply` | Push Route ไปยัง R1 จริงและ Rollback | **PASS** |
+| 13 | Show Command Execution (show ip route) | `POST /api/show` | รัน `show ip route` รับ Output จริง | **PASS** |
+| 14 | Freeform CLI Execution | `POST /api/cli/execute` | รัน `show clock` ผ่าน Virtual Terminal | **PASS** |
+| 15 | Topology Auto-Discovery (Real Links) | `GET /api/topology/json` | ตรวจพบ Node และสายเชื่อมต่อ R1-R2 จริง | **PASS** |
+| 16 | Front Panel Port Data | `GET /api/ports/<id>` | แสดงสถานะไฟ LED และข้อมูลพอร์ต | **PASS** |
+| 17 | Command Suggestions (Fuzzy Autocomplete) | `GET /api/suggestions?q=sh+ip` | แนะนำคำสั่ง Autocomplete อัตโนมัติ | **PASS** |
+| 18 | Command Normalization Engine | `POST /api/cli/execute` | แปลง `sh ip int br` -> คำสั่งเต็ม | **PASS** |
+| 19 | Virtual PC Config (Set IP & Gateway) | `POST /api/pc/<id>/config` | บันทึก IP, Mask, Gateway ของ PC | **PASS** |
+| 20 | Virtual PC Ping via Router Proxy | `POST /api/pc/<id>/ping` | ยิง Ping จำลองผ่าน Default Gateway Router | **PASS** |
+| 21 | Direct ICMP Ping Check Endpoint | `POST /api/ping` | ตรวจสอบการตอบสนอง ICMP | **PASS** |
+| 22 | Interface Up/Down State Toggle | `POST /api/config/interface/state` | สั่ง Up/Down แยกอิสระพร้อม Verify | **PASS** |
+| 23 | Direct Interface Config Endpoint | `POST /api/config/interface` | ตั้งค่า IP และ Description ผ่าน Endpoint หลัก | **PASS** |
 | 24 | Routing Redistribution Preview | `POST /api/routing/preview` | ตรวจสอบ `redistribute` และ `default-originate` | **PASS** |
-| 25 | Topology Diagnostic Ifaces | `GET /api/topology/interfaces` | ดึงข้อมูล Interface ทุกตัวที่เชื่อมต่ออยู่ | **PASS** |
-| 26 | EVE-NG Direct Import | `POST /api/eveng/import` | ดึงโครงสร้าง Topology จริงจาก EVE-NG Server | **PASS** |
+| 25 | Topology Interfaces Diagnostics | `GET /api/topology/interfaces` | ดึงข้อมูล Interface ทุกตัวที่เชื่อมต่ออยู่ | **PASS** |
+| 26 | EVE-NG Direct Import Endpoint | `POST /api/eveng/import` | ดึงโครงสร้าง Topology จริงจาก EVE-NG Server | **PASS** |
 | 27 | Interface DHCP Configuration | `POST /api/config/interface` | ตั้งค่าโหมด DHCP Client (`ip address dhcp`) | **PASS** |
+| 28 | Interface No IP Configuration | `POST /api/config/interface` | ตั้งค่าโหมดลบ IP (`no ip address` / `no ip add`) | **PASS** |
 
 ---
 
@@ -258,7 +265,7 @@ Assignment-2-NetPro/
 │   └── index.html                            # โครงสร้างหน้าเว็บหลัก
 │
 ├── tests/                                    # [โฟลเดอร์สำหรับทดสอบระบบ]
-│   ├── test_all_features.py                  # ชุดทดสอบอัตโนมัติครบ 27 ฟังก์ชัน (Test Suite)
+│   ├── test_all_features.py                  # ชุดทดสอบอัตโนมัติครบ 28 ฟังก์ชัน (Test Suite)
 │   ├── test_cdp.py                           # สคริปต์ทดสอบ CDP Protocol
 │   ├── test_cmd.py                           # สคริปต์ทดสอบ Netmiko Execution
 │   ├── test_parse.py                         # สคริปต์ทดสอบ Text Parsing

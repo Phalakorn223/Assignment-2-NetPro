@@ -121,14 +121,14 @@ def save_inventory(devices: list):
 
 
 def add_device_to_inventory(device: dict) -> dict:
-    """เพิ่ม device ใหม่ ให้ id อัตโนมัติ"""
+    """เพิ่ม device ใหม่ ให้ id อัตโนมัติ (ใช้ name เป็น id ถ้ามีและไม่ซ้ำ)"""
     devices = load_inventory()
-    # กำหนด ID ถ้าไม่มี โดยใช้ name เป็นอันดับแรก
+    # กำหนด ID ถ้าไม่มี
     if not device.get("id"):
-        name = device.get("name")
+        cand_id = (device.get("name") or "").strip()
         existing_ids = [d.get("id", "") for d in devices]
-        if name and name not in existing_ids:
-            device["id"] = name
+        if cand_id and cand_id not in existing_ids:
+            device["id"] = cand_id
         else:
             count = 1
             while f"device-{count}" in existing_ids:
@@ -140,7 +140,7 @@ def add_device_to_inventory(device: dict) -> dict:
 
 
 def remove_device_from_inventory(device_id: str) -> bool:
-    """ลบ device จาก inventory"""
+    """ลบ device จาก inventory (รองรับทั้ง id และ name)"""
     devices = load_inventory()
     original_len = len(devices)
     devices = [d for d in devices if d.get("id") != device_id and d.get("name") != device_id]
@@ -152,7 +152,10 @@ def remove_device_from_inventory(device_id: str) -> bool:
 
 def get_device_by_id(device_id: str) -> Optional[dict]:
     devices = load_inventory()
-    return next((d for d in devices if d.get("id") == device_id or d.get("name") == device_id), None)
+    for d in devices:
+        if d.get("id") == device_id or d.get("name") == device_id:
+            return d
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -248,15 +251,22 @@ class ConnectionManager:
 
                 conn = ConnectHandler(**params)
                 # ลองเข้า enable mode ถ้าทำได้
+                enable_ok = True
                 try:
                     conn.enable()
                 except Exception:
-                    pass
+                    enable_ok = False
                 try:
                     conn.send_command("terminal length 0")
                 except Exception:
                     pass
                 self.pool[device_id] = {"handler": conn, "type": "TELNET", "params": dict(device_params)}
+                if not enable_ok:
+                    return {
+                        "success": True,
+                        "warning": True,
+                        "message": f"Telnet เชื่อมต่อ {ip}:{port} สำเร็จ (User Mode: >) แต่ Router ไม่สามารถเข้า Enable Mode (#) ได้ — บน Router จำเป็นต้องมีคำสั่ง 'enable secret <รหัส>' เพื่อให้สามารถแก้ไขคอนฟิกผ่าน Telnet ได้"
+                    }
                 return {"success": True, "message": f"Telnet เชื่อมต่อ {ip}:{port} สำเร็จ"}
 
             elif conn_type == "SERIAL":
@@ -265,6 +275,23 @@ class ConnectionManager:
                 serial_port = device_params.get("serial_port", "COM1")
                 baudrate = int(device_params.get("baudrate", 9600))
                 ser = serial.Serial(serial_port, baudrate=baudrate, timeout=2)
+                # ล้าง buffer ตกค้างและส่ง wake-up signal (\r\n) เพื่อปลุก Cisco console
+                try:
+                    ser.reset_input_buffer()
+                    ser.reset_output_buffer()
+                    ser.write(b"\r\n\r\n")
+                    time.sleep(0.3)
+                    p_raw = ser.read_all().decode("utf-8", errors="ignore")
+                    if ">" in p_raw and "#" not in p_raw:
+                        ser.write(b"enable\r\n")
+                        time.sleep(0.3)
+                        ser.read_all()
+                    # ปิด pagination (terminal length 0) เพื่อไม่ให้ติด --More--
+                    ser.write(b"terminal length 0\r\n")
+                    time.sleep(0.3)
+                    ser.read_all()
+                except Exception:
+                    pass
                 self.pool[device_id] = {"handler": ser, "type": "SERIAL", "params": dict(device_params)}
                 return {"success": True, "message": f"Serial เชื่อมต่อ {serial_port} ({baudrate} baud) สำเร็จ"}
 
@@ -280,12 +307,13 @@ class ConnectionManager:
 
     def _ensure_connection(self, device_id: str) -> bool:
         """ตรวจและเชื่อมต่ออัตโนมัติถ้า session หลุดหรือยังไม่ได้ connect"""
-        if device_id in self.pool:
+        if self.is_connected(device_id):
             return True
         dev = get_device_by_id(device_id)
         if dev and (dev.get("device_type_label") or "").lower() not in ("pc", "network"):
-            print(f"[ConnectionManager] Auto-connecting to {device_id}...")
-            res = self.connect(device_id, dev, skip_ping=True)
+            target_id = dev.get("id", device_id)
+            print(f"[ConnectionManager] Auto-connecting to {target_id}...")
+            res = self.connect(target_id, dev, skip_ping=True)
             return res.get("success", False)
         return False
 
@@ -295,21 +323,20 @@ class ConnectionManager:
         use_textfsm=True เพื่อ parse output เป็น structured data (สำหรับ CDP/LLDP)
         มี auto-reconnect ถ้า session หลุด
         """
-        if device_id not in self.pool:
-            if not self._ensure_connection(device_id):
+        dev = get_device_by_id(device_id)
+        target_id = dev.get("id", device_id) if dev else device_id
+
+        if not self.is_connected(target_id) and not self.is_connected(device_id):
+            if not self._ensure_connection(target_id):
                 return {"success": False, "output": f"Device '{device_id}' ยังไม่ได้เชื่อมต่อ"}
 
-        entry = self.pool[device_id]
+        active_id = target_id if target_id in self.pool else device_id
+        entry = self.pool[active_id]
         conn_type = entry["type"]
         handler = entry["handler"]
 
         try:
             if conn_type in ("SSH", "TELNET"):
-                try:
-                    if hasattr(handler, "check_config_mode") and handler.check_config_mode():
-                        handler.exit_config_mode()
-                except Exception:
-                    pass
                 output = handler.send_command(command, use_textfsm=use_textfsm)
                 # ตรวจ IOS syntax error
                 if isinstance(output, str) and re.search(r"% Invalid input detected at", output):
@@ -322,21 +349,113 @@ class ConnectionManager:
 
             elif conn_type == "SERIAL":
                 ser = handler
-                ser.write(f"{command}\n".encode("utf-8"))
-                time.sleep(1)
-                raw = ser.read_all().decode("utf-8", errors="ignore")
-                return {"success": True, "output": raw}
+                ser.reset_input_buffer()
+                ser.write(f"{command.strip()}\r\n".encode("utf-8"))
+                # วนลูปอ่านจนกว่าจะเจอ prompt (# หรือ >) หรือ timeout 3.5 วินาที
+                start_time = time.time()
+                raw_bytes = bytearray()
+                timeout = 3.5
+                while time.time() - start_time < timeout:
+                    if ser.in_waiting > 0:
+                        chunk = ser.read(ser.in_waiting)
+                        raw_bytes.extend(chunk)
+                        decoded = raw_bytes.decode("utf-8", errors="ignore")
+                        lines = [l.strip() for l in decoded.splitlines() if l.strip()]
+                        if len(lines) >= 2 and any(re.search(r"^[A-Za-z0-9_\-\.\(\)]+[#>]\s*$", l) for l in lines[-2:]):
+                            break
+                    time.sleep(0.06)
+                output = raw_bytes.decode("utf-8", errors="ignore")
+                return {"success": True, "output": output}
 
         except Exception as e:
             err_msg = str(e).lower()
             if retry and any(term in err_msg for term in ("closed", "eof", "broken pipe", "connection reset", "socket", "timeout")):
-                print(f"[ConnectionManager] Connection dropped for {device_id} ({e}), reconnecting...")
-                self.disconnect(device_id)
-                if self._ensure_connection(device_id):
-                    return self.send_command(device_id, command, use_textfsm=use_textfsm, retry=False)
+                print(f"[ConnectionManager] Connection dropped for {active_id} ({e}), reconnecting...")
+                self.disconnect(active_id)
+                if self._ensure_connection(active_id):
+                    return self.send_command(active_id, command, use_textfsm=use_textfsm, retry=False)
             return {"success": False, "output": f"Error: {str(e)}"}
 
         return {"success": False, "output": "Unknown connection type"}
+
+    def send_interactive(self, device_id: str, command: str) -> dict:
+        """
+        ส่งคำสั่งแบบ Interactive Terminal โดยตรงไปยังอุปกรณ์ (รักษา session state ต่อเนื่อง)
+        ดึง prompt และ output จริงจาก Router / Switch โดยตรง
+        คืน {"success": True, "output": output, "prompt": prompt}
+        """
+        dev = get_device_by_id(device_id)
+        target_id = dev.get("id", device_id) if dev else device_id
+
+        if not self.is_connected(target_id) and not self.is_connected(device_id):
+            if not self._ensure_connection(target_id):
+                return {"success": False, "output": f"Device '{device_id}' ยังไม่ได้เชื่อมต่อ", "prompt": ""}
+
+        active_id = target_id if target_id in self.pool else device_id
+        entry = self.pool[active_id]
+        conn_type = entry["type"]
+        handler = entry["handler"]
+
+        try:
+            cmd_str = (command or "").strip()
+            # ส่งคำสั่งพร้อม \r\n หรือถ้าเป็นคำสั่งว่างส่ง \r\n เพื่อรีเฟรช prompt
+            cmd_to_send = f"{cmd_str}\r\n" if cmd_str else "\r\n"
+
+            if conn_type in ("SSH", "TELNET"):
+                handler.write_channel(cmd_to_send)
+                # อ่าน output จาก channel
+                raw = handler.read_channel_timing(last_read=0.5, read_timeout=8.0)
+            elif conn_type == "SERIAL":
+                ser = handler
+                ser.reset_input_buffer()
+                ser.write(cmd_to_send.encode("utf-8"))
+
+                start_time = time.time()
+                raw_bytes = bytearray()
+                timeout = 4.0
+                while time.time() - start_time < timeout:
+                    if ser.in_waiting > 0:
+                        chunk = ser.read(ser.in_waiting)
+                        raw_bytes.extend(chunk)
+                        decoded = raw_bytes.decode("utf-8", errors="ignore")
+                        lines = [l.strip() for l in decoded.splitlines() if l.strip()]
+                        if len(lines) >= 1 and re.search(r"^[A-Za-z0-9_\-\.\(\)]+[#>]\s*$", lines[-1]):
+                            break
+                    time.sleep(0.05)
+                raw = raw_bytes.decode("utf-8", errors="ignore")
+            else:
+                return {"success": False, "output": "Unknown connection type", "prompt": ""}
+
+            # Normalize line endings
+            raw_clean = raw.replace("\r\r\n", "\n").replace("\r\n", "\n").replace("\r", "\n")
+            lines = raw_clean.split("\n")
+
+            # ตัด echo ของ command ถ้ามีที่บรรทัดแรก
+            if cmd_str and lines and cmd_str in lines[0]:
+                lines = lines[1:]
+
+            # ลบบรรทัดว่างต่อท้าย
+            while lines and not lines[-1].strip():
+                lines.pop()
+
+            # สกัด prompt ตัวจริงของ Cisco ออกมาจากบรรทัดสุดท้าย (เช่น S1#, S1(config)#, S1(config-line)#, Router2>)
+            prompt = ""
+            if lines and re.search(r"^[A-Za-z0-9_\-\.\(\)]+[#>]\s*$", lines[-1].strip()):
+                prompt = lines.pop().strip()
+
+            clean_output = "\n".join(lines).strip()
+            return {
+                "success": True,
+                "output": clean_output,
+                "prompt": prompt,
+                "raw": raw
+            }
+
+        except Exception as e:
+            err_msg = str(e)
+            if "PermissionError" in err_msg or "Access is denied" in err_msg:
+                return {"success": False, "output": "พอร์ต Serial ถูกเปิดใช้งานโดยโปรแกรมอื่น (เช่น Tera Term) — กรุณาปิดโปรแกรมอื่นก่อน", "prompt": ""}
+            return {"success": False, "output": f"Error: {err_msg}", "prompt": ""}
 
     def send_config(self, device_id: str, commands: list, retry: bool = True) -> dict:
         """
@@ -345,15 +464,19 @@ class ConnectionManager:
         ตรวจ IOS syntax error ใน output
         มี auto-reconnect ถ้า session หลุด
         """
-        if device_id not in self.pool:
-            if not self._ensure_connection(device_id):
+        dev = get_device_by_id(device_id)
+        target_id = dev.get("id", device_id) if dev else device_id
+
+        if not self.is_connected(target_id) and not self.is_connected(device_id):
+            if not self._ensure_connection(target_id):
                 return {
                     "success": False,
                     "output": f"Device '{device_id}' ยังไม่ได้เชื่อมต่อ",
                     "message": f"Device '{device_id}' ยังไม่ได้เชื่อมต่อ"
                 }
 
-        entry = self.pool[device_id]
+        active_id = target_id if target_id in self.pool else device_id
+        entry = self.pool[active_id]
         conn_type = entry["type"]
         handler = entry["handler"]
 
@@ -372,30 +495,52 @@ class ConnectionManager:
 
             elif conn_type == "SERIAL":
                 ser = handler
+                ser.reset_input_buffer()
+                # ตรวจสอบและเข้า enable mode ถ้ายังอยู่ที่ prompt user mode (>)
+                ser.write(b"\r\n")
+                time.sleep(0.2)
+                p = ser.read_all().decode("utf-8", errors="ignore")
+                if ">" in p and "#" not in p:
+                    ser.write(b"enable\r\n")
+                    time.sleep(0.3)
+                    ser.read_all()
+
+                ser.write(b"configure terminal\r\n")
+                time.sleep(0.4)
+                ser.read_all()
                 output_parts = []
                 for cmd in commands:
-                    ser.write(f"{cmd}\n".encode("utf-8"))
-                    time.sleep(0.5)
+                    ser.write(f"{cmd.strip()}\r\n".encode("utf-8"))
+                    time.sleep(0.3)
                     output_parts.append(ser.read_all().decode("utf-8", errors="ignore"))
+                ser.write(b"end\r\n")
+                time.sleep(0.3)
+                output_parts.append(ser.read_all().decode("utf-8", errors="ignore"))
                 return {"success": True, "output": "\n".join(output_parts), "message": "ตั้งค่าสำเร็จ"}
 
         except Exception as e:
             err_msg = str(e).lower()
             if retry and any(term in err_msg for term in ("closed", "eof", "broken pipe", "connection reset", "socket", "timeout")):
-                print(f"[ConnectionManager] Connection dropped for {device_id} ({e}), reconnecting...")
-                self.disconnect(device_id)
-                if self._ensure_connection(device_id):
-                    return self.send_config(device_id, commands, retry=False)
+                print(f"[ConnectionManager] Connection dropped for {active_id} ({e}), reconnecting...")
+                self.disconnect(active_id)
+                if self._ensure_connection(active_id):
+                    return self.send_config(active_id, commands, retry=False)
             return {"success": False, "output": f"Error: {str(e)}", "message": f"ส่งคำสั่งล้มเหลว: {str(e)}"}
 
         return {"success": False, "output": "Unknown connection type", "message": "Unknown connection type"}
 
     def disconnect(self, device_id: str) -> dict:
         """ปิด connection และลบออกจาก pool"""
-        if device_id not in self.pool:
+        target_id = device_id
+        if target_id not in self.pool:
+            dev = get_device_by_id(device_id)
+            if dev and dev.get("id") in self.pool:
+                target_id = dev.get("id")
+
+        if target_id not in self.pool:
             return {"success": False, "message": f"Device '{device_id}' ไม่ได้อยู่ใน pool"}
         try:
-            entry = self.pool[device_id]
+            entry = self.pool[target_id]
             if entry["type"] in ("SSH", "TELNET"):
                 try:
                     entry["handler"].disconnect()
@@ -406,10 +551,10 @@ class ConnectionManager:
                     entry["handler"].close()
                 except Exception:
                     pass
-            del self.pool[device_id]
-            return {"success": True, "message": f"Disconnected {device_id}"}
+            del self.pool[target_id]
+            return {"success": True, "message": f"Disconnected {target_id}"}
         except Exception as e:
-            self.pool.pop(device_id, None)
+            self.pool.pop(target_id, None)
             return {"success": False, "message": str(e)}
 
     def disconnect_all(self):
@@ -420,7 +565,11 @@ class ConnectionManager:
     def is_connected(self, device_id: str) -> bool:
         if device_id in self.pool:
             return True
-        return self._ensure_connection(device_id)
+        for k, v in self.pool.items():
+            params = v.get("params", {})
+            if k == device_id or params.get("id") == device_id or params.get("name") == device_id:
+                return True
+        return False
 
     def get_connected_devices(self) -> list:
         return [{"id": k, "type": v["type"]} for k, v in self.pool.items()]

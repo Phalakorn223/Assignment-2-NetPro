@@ -39,7 +39,7 @@ class EveNgClient:
                 resp = self.session.post(
                     f"{url}/auth/login",
                     json={"username": username, "password": password, "html5": "-1"},
-                    timeout=10,
+                    timeout=3,
                 )
                 if resp.status_code == 200:
                     self.base_url = url
@@ -55,21 +55,47 @@ class EveNgClient:
         resp.raise_for_status()
         return resp.json()
 
+    def normalize_lab_path(self, lab_path: str) -> str:
+        raw = (lab_path or "").strip().strip("/")
+        if not raw:
+            return ""
+        # ค้นหา match case-insensitive จากรายการ lab จริงใน EVE-NG
+        try:
+            folders = self.session.get(f"{self.base_url}/folders/", timeout=5).json()
+            labs = folders.get("data", {}).get("labs", [])
+            for lab in labs:
+                f_name = lab.get("file", "")
+                p_name = lab.get("path", "").strip("/")
+                clean_f = f_name.replace(".unl", "").lower()
+                clean_raw = raw.replace(".unl", "").lower()
+                if clean_raw == clean_f or raw.lower() == f_name.lower() or raw.lower() == p_name.lower():
+                    return p_name if p_name else f_name
+        except Exception:
+            pass
+        if not raw.endswith(".unl"):
+            raw += ".unl"
+        return raw
+
+    def list_labs(self) -> Any:
+        resp = self.session.get(f"{self.base_url}/labs", timeout=15)
+        resp.raise_for_status()
+        return resp.json()
+
     def get_topology(self, lab_path: str) -> Any:
-        path = lab_path.strip("/")
+        path = self.normalize_lab_path(lab_path)
         resp = self.session.get(f"{self.base_url}/labs/{path}/topology", timeout=15)
         resp.raise_for_status()
         return resp.json()
 
     def get_nodes(self, lab_path: str) -> Any:
-        path = lab_path.strip("/")
+        path = self.normalize_lab_path(lab_path)
         resp = self.session.get(f"{self.base_url}/labs/{path}/nodes", timeout=15)
         resp.raise_for_status()
         return resp.json()
 
     def get_networks(self, lab_path: str) -> Any:
         """ดึงข้อมูล networks (cloud/bridge) จาก EVE-NG lab"""
-        path = lab_path.strip("/")
+        path = self.normalize_lab_path(lab_path)
         resp = self.session.get(f"{self.base_url}/labs/{path}/networks", timeout=15)
         resp.raise_for_status()
         return resp.json()
@@ -80,7 +106,7 @@ def eveng_topology_to_graph(topology_data: dict, nodes_data: dict, networks_data
     แปลง response จาก EVE-NG เป็น {nodes, edges} แบบ vis-network
     รองรับรูปแบบ JSON ทั้งแบบ dict และ list ตามเวอร์ชัน EVE-NG
     จับคู่ node กับ inventory device name (เช่น R1, R2, R3)
-    กรอง internal bridge networks (visibility 0) ออก และ enrich ด้วย interface IP จริง
+    รองรับหลายเครือข่าย/หลายวง (Multi-Network Clouds) พร้อมคำนวณ subnet อัตโนมัติจาก Interface IP
     """
     nodes_out = []
     edges_out = []
@@ -127,6 +153,7 @@ def eveng_topology_to_graph(topology_data: dict, nodes_data: dict, networks_data
 
             nodes_out.append({
                 "id": name,
+                "node_id": nid,
                 "name": name,
                 "type": dtype,
                 "ip": dev_ip,
@@ -136,6 +163,7 @@ def eveng_topology_to_graph(topology_data: dict, nodes_data: dict, networks_data
 
     # --- Parse network objects (cloud/bridge) ---
     net_id_to_name = {}
+    net_nodes_map = {}
     if networks_data:
         raw_nets = networks_data.get("data") if isinstance(networks_data, dict) else networks_data
         if isinstance(raw_nets, dict):
@@ -144,22 +172,28 @@ def eveng_topology_to_graph(topology_data: dict, nodes_data: dict, networks_data
             for net in raw_nets:
                 if not isinstance(net, dict):
                     continue
-                # ข้าม internal bridge network ที่ visibility == '0'
-                if str(net.get("visibility", "1")) == "0":
+                # ข้าม internal bridge network ที่ visibility == '0' และมีเพียง 2 endpoints
+                # แต่ถ้ามี 3+ endpoints หรือ visibility == 1 ให้แสดงเป็นวง Network Cloud
+                count = int(net.get("count", 0))
+                vis = str(net.get("visibility", "1"))
+                if vis == "0" and count <= 2:
                     continue
 
                 net_id = str(net.get("id", ""))
                 net_name = net.get("name") or net.get("label") or f"Net-{net_id}"
                 net_id_to_name[net_id] = net_name
                 net_id_to_name[f"network{net_id}"] = net_name
-                nodes_out.append({
+                
+                net_obj = {
                     "id": net_name,
                     "name": net_name,
                     "type": "network",
-                    "ip": "192.168.74.0/24",
+                    "ip": "",  # จะคำนวณ subnet จาก IP ของ interface ที่ต่ออยู่ด้านล่าง
                     "model": "cloud",
                     "status": "discovered",
-                })
+                }
+                net_nodes_map[net_name] = net_obj
+                nodes_out.append(net_obj)
 
     # --- Parse topology links ---
     raw_topo = topology_data.get("data") if isinstance(topology_data, dict) else topology_data
@@ -184,6 +218,8 @@ def eveng_topology_to_graph(topology_data: dict, nodes_data: dict, networks_data
         return ""
 
     import re
+    # ตรวจจับ Subnet สำหรับแต่ละ Network Cloud จาก Interface IP ของอุปกรณ์ที่ต่ออยู่
+    net_subnets = {}
     for link in links:
         if not isinstance(link, dict):
             continue
@@ -204,6 +240,22 @@ def eveng_topology_to_graph(topology_data: dict, nodes_data: dict, networks_data
         from_ip = find_iface_ip(from_id, src_port)
         to_ip = find_iface_ip(to_id, dst_port)
 
+        # เก็บ subnet เข้าสู่ network node ที่เกี่ยวข้อง
+        target_net = None
+        cand_ip = ""
+        if src_type == "network" or from_id in net_nodes_map:
+            target_net = from_id
+            cand_ip = to_ip
+        elif dst_type == "network" or to_id in net_nodes_map:
+            target_net = to_id
+            cand_ip = from_ip
+
+        if target_net and cand_ip and cand_ip not in ("unassigned", "-"):
+            parts = cand_ip.split(".")
+            if len(parts) == 4:
+                sub = f"{parts[0]}.{parts[1]}.{parts[2]}.0/24"
+                net_subnets.setdefault(target_net, []).append(sub)
+
         edge = {
             "from": from_id,
             "to": to_id,
@@ -217,6 +269,15 @@ def eveng_topology_to_graph(topology_data: dict, nodes_data: dict, networks_data
         if to_ip:
             edge["to_ip"] = to_ip
         edges_out.append(edge)
+
+    # อัปเดต Subnet ให้กับแต่ละ Network Cloud ("วง")
+    for net_name, net_obj in net_nodes_map.items():
+        subs = net_subnets.get(net_name, [])
+        if subs:
+            net_obj["ip"] = subs[0]
+        elif not net_obj.get("ip"):
+            # Fallback หากยังไม่ได้ต่อ IP
+            net_obj["ip"] = "Multi-Access Network"
 
     return {"nodes": nodes_out, "edges": edges_out}
 

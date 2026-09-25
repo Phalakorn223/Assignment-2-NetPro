@@ -157,10 +157,157 @@ body{font-family:var(--font);background:var(--bg-dark);color:var(--text);height:
 .autocomplete-item{padding:6px 12px;font-family:var(--mono);font-size:12px;cursor:pointer;color:var(--text-muted)}
 .autocomplete-item:hover{background:rgba(59,130,246,.15);color:var(--text)}
 
+/* =============================================================================
+   Authentic Cisco IOS Console Terminal (Packet Tracer / PuTTY Style)
+   ============================================================================= */
+.cisco-terminal-window {
+    background: #000000;
+    border: 1px solid #1e293b;
+    border-radius: 8px;
+    box-shadow: 0 16px 40px rgba(0, 0, 0, 0.85);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    margin-top: 8px;
+}
+
+.cisco-terminal-titlebar {
+    background: #0f172a;
+    border-bottom: 1px solid #1e293b;
+    padding: 8px 14px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    user-select: none;
+}
+
+.cisco-titlebar-left {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.cisco-win-dot {
+    width: 11px;
+    height: 11px;
+    border-radius: 50%;
+    display: inline-block;
+}
+.cisco-win-dot.close { background: #ef4444; cursor: pointer; }
+.cisco-win-dot.min { background: #f59e0b; }
+.cisco-win-dot.max { background: #10b981; }
+
+.cisco-titlebar-text {
+    font-family: var(--mono);
+    font-size: 12px;
+    font-weight: 600;
+    color: #94a3b8;
+    margin-left: 6px;
+}
+
+.cisco-titlebar-actions {
+    display: flex;
+    gap: 8px;
+}
+
+.cisco-btn-titlebar {
+    background: #1e293b;
+    border: 1px solid #334155;
+    color: #cbd5e1;
+    font-size: 11px;
+    font-family: var(--mono);
+    padding: 3px 8px;
+    border-radius: 4px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    transition: all 0.15s ease;
+}
+.cisco-btn-titlebar:hover {
+    background: #334155;
+    color: #ffffff;
+}
+
+.cisco-terminal-viewport {
+    background: #000000;
+    min-height: 480px;
+    max-height: 600px;
+    overflow-y: auto;
+    padding: 16px 20px;
+    font-family: 'Consolas', 'Courier New', 'Lucida Console', Monaco, monospace;
+    font-size: 13.5px;
+    line-height: 1.38;
+    color: #ffffff;
+    cursor: text;
+}
+
+.cisco-terminal-viewport::-webkit-scrollbar {
+    width: 8px;
+}
+.cisco-terminal-viewport::-webkit-scrollbar-track {
+    background: #000000;
+}
+.cisco-terminal-viewport::-webkit-scrollbar-thumb {
+    background: #27272a;
+    border-radius: 4px;
+}
+.cisco-terminal-viewport::-webkit-scrollbar-thumb:hover {
+    background: #3f3f46;
+}
+
+.cli-line {
+    white-space: pre-wrap;
+    word-break: break-all;
+    color: #ffffff;
+    font-family: 'Consolas', 'Courier New', 'Lucida Console', Monaco, monospace;
+    font-size: 13.5px;
+    line-height: 1.38;
+}
+
+.cisco-active-line {
+    display: flex;
+    align-items: baseline;
+    width: 100%;
+    margin-top: 1px;
+}
+
+.cisco-prompt-span {
+    color: #ffffff;
+    font-family: 'Consolas', 'Courier New', 'Lucida Console', Monaco, monospace;
+    font-size: 13.5px;
+    line-height: 1.38;
+    white-space: pre;
+    user-select: none;
+    margin-right: 0px;
+}
+
+.cisco-pure-input {
+    flex: 1;
+    background: transparent !important;
+    border: none !important;
+    outline: none !important;
+    box-shadow: none !important;
+    color: #ffffff !important;
+    font-family: 'Consolas', 'Courier New', 'Lucida Console', Monaco, monospace !important;
+    font-size: 13.5px !important;
+    line-height: 1.38 !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    caret-color: #ffffff;
+    caret-shape: block; /* Native solid rectangular block cursor █ */
+}
+
 /* Connection tab */
 .ping-result-box{padding:8px 12px;border-radius:var(--r-sm);font-size:13px;font-weight:500;margin-top:8px}
 .ping-result-box.success{background:rgba(16,185,129,.15);color:var(--success);border:1px solid rgba(16,185,129,.3)}
 .ping-result-box.fail{background:rgba(239,68,68,.15);color:var(--danger);border:1px solid rgba(239,68,68,.3)}
+.conn-result-box{padding:10px 14px;border-radius:var(--r-sm);font-size:13px;font-weight:500;margin-top:10px;display:flex;align-items:flex-start;gap:10px;line-height:1.45;transition:all .25s ease}
+.conn-result-box i{font-size:15px;margin-top:2px;flex-shrink:0}
+.conn-result-box.connecting{background:rgba(59,130,246,.15);color:#60a5fa;border:1px solid rgba(59,130,246,.4);animation:connPulse 1.5s infinite ease-in-out}
+.conn-result-box.success{background:rgba(16,185,129,.15);color:var(--success);border:1px solid rgba(16,185,129,.4)}
+.conn-result-box.fail{background:rgba(239,68,68,.15);color:var(--danger);border:1px solid rgba(239,68,68,.4)}
+@keyframes connPulse{0%,100%{opacity:1;border-color:rgba(59,130,246,.4)}50%{opacity:.75;border-color:rgba(59,130,246,.85)}}
 .connected-devices-section{margin-top:16px;border-top:1px solid var(--border);padding-top:12px}
 .connected-devices-section h5{font-size:12px;font-weight:600;color:var(--text-muted);margin-bottom:8px;display:flex;align-items:center;gap:6px}
 .active-conn-item{display:flex;align-items:center;justify-content:space-between;padding:7px 10px;background:rgba(16,185,129,.07);border:1px solid rgba(16,185,129,.2);border-radius:var(--r-sm);margin-bottom:6px;font-size:12px}

@@ -202,12 +202,16 @@ def build_topology_graph(conn_manager, device_ids: list, inventory_devices: list
     # ----- ขั้นตอน 1: ลอง EVE-NG Auto-Discovery ก่อน -----
     try:
         from eve_ng_client import auto_discover_eveng
-        # หา EVE-NG host จาก inventory
-        eve_hosts = set()
+        # หา EVE-NG host จาก inventory (จัดลำดับให้อุปกรณ์ที่มี console port > 1000 ตรวจสอบก่อน)
+        eve_hosts = []
         for dev in inventory_devices:
             ip = dev.get("ip", "")
-            if ip and ip != "127.0.0.1":
-                eve_hosts.add(ip)
+            port = int(dev.get("port") or 0)
+            if ip and ip not in ("127.0.0.1", "localhost"):
+                if port > 1000 and ip not in eve_hosts:
+                    eve_hosts.insert(0, ip)
+                elif ip not in eve_hosts:
+                    eve_hosts.append(ip)
         for host in eve_hosts:
             eve_topo = auto_discover_eveng(host, "admin", "eve", inventory_devices, all_device_interfaces)
             if eve_topo and eve_topo.get("nodes") and eve_topo.get("edges"):
@@ -388,14 +392,15 @@ def _smart_subnet_matching(G, all_device_interfaces: dict, primary_ips: dict = N
                        status="up",
                        method="subnet_match")
         else:
-            # Multi-access segment (เช่น 3+ devices บน 192.168.74.0/24 ต่อเข้า Net)
-            net_name = "Net"
+            # Multi-access segment (วง Network สำหรับแต่ละ Subnet เช่น 192.168.74.0/24, 10.0.0.0/24)
             net_ip = str(c[0]["network"])
-            if net_name not in G:
-                G.add_node(net_name, name=net_name, type="network",
+            net_node_id = f"Net_{net_ip.replace('/', '_').replace('.', '_')}"
+            net_name = f"Net {net_ip}"
+            if net_node_id not in G:
+                G.add_node(net_node_id, name=net_name, type="network",
                            ip=net_ip, model="cloud", status="discovered")
             for m in c:
-                G.add_edge(m["dev"], net_name,
+                G.add_edge(m["dev"], net_node_id,
                            local_port=m["if_name"],
                            remote_port="",
                            local_ip=m["ip"],

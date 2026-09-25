@@ -1,8 +1,20 @@
 [
   {
-    "id": "R1",
+    "name": "S1",
+    "model": "",
+    "device_type_label": "switch",
+    "connection_type": "TELNET",
+    "ip": "11.12.13.2",
+    "port": 23,
+    "username": "",
+    "password": "admin",
+    "mask": "255.255.255.0",
+    "gateway": "",
+    "id": "S1"
+  },
+  {
     "name": "R1",
-    "model": "L3-ADVENTERPRISEK9-M-15.4-2T.bin",
+    "model": "",
     "device_type_label": "router",
     "connection_type": "TELNET",
     "ip": "192.168.74.131",
@@ -10,25 +22,12 @@
     "username": "",
     "password": "",
     "mask": "255.255.255.0",
-    "gateway": ""
+    "gateway": "",
+    "id": "R1"
   },
   {
-    "id": "R2",
-    "name": "R2",
-    "model": "L3-ADVENTERPRISEK9-M-15.4-2T.bin",
-    "device_type_label": "router",
-    "connection_type": "TELNET",
-    "ip": "192.168.74.131",
-    "port": 32770,
-    "username": "",
-    "password": "",
-    "mask": "255.255.255.0",
-    "gateway": ""
-  },
-  {
-    "id": "R3",
     "name": "R3",
-    "model": "L3-ADVENTERPRISEK9-M-15.4-2T.bin",
+    "model": "",
     "device_type_label": "router",
     "connection_type": "TELNET",
     "ip": "192.168.74.131",
@@ -36,6 +35,20 @@
     "username": "",
     "password": "",
     "mask": "255.255.255.0",
-    "gateway": ""
+    "gateway": "",
+    "id": "R3"
+  },
+  {
+    "name": "R2",
+    "model": "",
+    "device_type_label": "router",
+    "connection_type": "TELNET",
+    "ip": "192.168.74.131",
+    "port": 32770,
+    "username": "",
+    "password": "",
+    "mask": "255.255.255.0",
+    "gateway": "",
+    "id": "R2"
   }
 ]

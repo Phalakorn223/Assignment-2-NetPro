@@ -5,12 +5,15 @@ command_builder.py — Pure functions สำหรับแปลง form data �
 
 
 def build_ip_address_commands(interface: str, ip: str, mask: str = None, description: str = None) -> list:
-    """กำหนด IP Address บน interface (Static หรือ DHCP) พร้อม no shutdown"""
+    """กำหนด IP Address บน interface (Static, DHCP หรือ No IP) พร้อม no shutdown"""
     cmds = [f"interface {interface}"]
     if description:
         cmds.append(f"description {description}")
-    if ip and ip.lower().strip() == "dhcp":
+    ip_clean = (ip or "").lower().strip()
+    if ip_clean == "dhcp":
         cmds.append("ip address dhcp")
+    elif ip_clean in ("no", "no ip", "no ip address", "no ip add", "none", "unassigned", "disable"):
+        cmds.append("no ip address")
     else:
         cmds.append(f"ip address {ip} {mask}")
     cmds.append("no shutdown")

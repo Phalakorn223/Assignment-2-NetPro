@@ -10,10 +10,10 @@
 - มีระบบ **Auto-Reconnect Engine** ทนทานต่อ Socket Drops / Idle Timeouts บน Telnet Console ของ EVE-NG
 - บูรณาการ **EVE-NG REST API** ดึงโครงสร้าง Topology, Nodes, และ Console Port เข้า Device Inventory ได้โดยตรง
 - **Auto-Discovery Topology Engine** พัฒนาด้วย NetworkX MultiGraph + IP Subnet Overlap Matching รองรับการเชื่อมโยงหลายสายระหว่างอุปกรณ์ (Multi-Leg) และเครือข่าย Multi-Access Cloud
-- **Interface Configuration** รองรับทั้ง **Static IP** และ **DHCP Client Mode (`ip address dhcp`)** พร้อมระบบสลับฟอร์มอัตโนมัติและ Live Cache Sync
+- **Interface Configuration (Tri-Mode)**: รองรับทั้ง **Static IP**, **DHCP Client Mode (`ip address dhcp`)**, และ **No IP Mode (`no ip address` / `no ip add`)** พร้อมระบบสลับฟอร์มอัตโนมัติ, Auto-Refresh ทุกครั้งที่เปลี่ยน Target Router และ Live Cache Sync
 - กำหนดค่า Routing Protocols ยอดนิยม (Static, RIP v2, EIGRP, OSPF, BGP) พร้อมระบบตรวจสอบไวยากรณ์ (Syntax Preview) และส่งคำสั่งไปยัง Router จริง
 - มี **Interactive CLI Terminal** รองรับคำสั่งย่อ, Autocomplete Dropdown, ประวัติคำสั่ง (History), และการทดสอบเชื่อมต่อด้วย **Virtual PC Ping**
-- ผ่านการทดสอบโดยสมบูรณ์ด้วยชุดทดสอบอัตโนมัติ **27 การทดสอบ (100% Pass)**
+- ผ่านการทดสอบโดยสมบูรณ์ด้วยชุดทดสอบอัตโนมัติ **28 การทดสอบ (100% Pass)**
 
 ---
 
@@ -116,7 +116,7 @@ Assignment-2-NetPro/
 ├── assignment-2-v3-network-automation-ui-spec.md   # ข้อกำหนดระบบ v3 (Source of Truth ปัจจุบัน)
 │
 ├── tests/                                    # โฟลเดอร์ชุดทดสอบและสคริปต์ตรวจสอบระบบ
-│   ├── test_all_features.py                  # ชุดทดสอบ End-to-End ครบทั้ง 27 ฟังก์ชัน (100% Pass)
+│   ├── test_all_features.py                  # ชุดทดสอบ End-to-End ครบทั้ง 28 ฟังก์ชัน (100% Pass)
 │   ├── test_cdp.py                           # สคริปต์ทดสอบ CDP Protocol Parsing
 │   ├── test_cmd.py                           # สคริปต์ทดสอบ Netmiko Command Execution
 │   ├── test_parse.py                         # สคริปต์ทดสอบ Regex Parser
@@ -146,13 +146,16 @@ Assignment-2-NetPro/
 - **On-Demand Connection**: เชื่อมต่ออุปกรณ์จาก `devices.json` ให้โดยอัตโนมัติเมื่อมีการเรียกใช้งานคำสั่ง
 - **Pre-flight Ping Check**: ทดสอบความพร้อมของ IP Address ก่อนเริ่มเชื่อมต่อ
 
-### 2. Interface Configuration & DHCP Support
-- **Dual Mode IP Configuration**:
+### 2. Interface Configuration (Tri-Mode) & Live Sync
+- **Tri-Mode IP Configuration**:
   - **Static IP Mode**: ระบุ IP Address และ Subnet Mask ตามมาตรฐาน
   - **DHCP Client Mode**: สร้างคำสั่ง `ip address dhcp` โดยไม่ใส่ Subnet Mask
+  - **No IP Mode (`no ip add` / `no ip address`)**: ลบ/ถอน IP Address ออกจากขา Interface
 - **Smart Form Adaptation**:
   - เมื่อเลือกโหมด DHCP หรือพิมพ์ `dhcp` ลงในช่อง IP ระบบจะสลับโหมดและปิดช่อง Subnet Mask ให้อัตโนมัติ
-  - เมื่อคลิกเลือกแถว Interface ในตาราง Step 1 หากขา Interface ได้รับ DHCP ระบบจะปรับฟอร์มเป็นโหมด DHCP ให้ทันที
+  - เมื่อเลือกโหมด No IP หรือพิมพ์คำว่า `no`, `no ip`, `no ip add`, `none`, `unassigned` ระบบจะเปลี่ยนเป็น `no ip address` และปิดช่อง Subnet Mask ให้อัตโนมัติ
+  - เมื่อคลิกเลือกแถว Interface ในตาราง Step 1 ระบบจะตรวจจับและสลับโหมด (Static, DHCP หรือ No IP) พร้อมตั้งค่าให้อัตโนมัติ
+- **Auto-Refresh on Target Switch**: เมื่อเปลี่ยน Router (ผ่าน Dropdown, Canvas Node, หรือ Inventory) ระบบจะดึงค่าสดจากอุปกรณ์ทันที
 - **Interface State**: สั่งเปิด (`no shutdown`) หรือปิด (`shutdown`) ขาเชื่อมต่อ
 - **Description**: ตั้งคำอธิบาย Interface ได้อิสระ
 - **Live Cache Force Refresh**: ปุ่ม Refresh และการ Deploy จะส่ง `?force=1` ดึงข้อมูลสดจาก Router และอัปเดต Topology Graph ทันที
@@ -194,47 +197,48 @@ Assignment-2-NetPro/
 
 ---
 
-## ชุดการทดสอบระบบ 27 ฟังก์ชัน (Test Suite Results)
+## ชุดการทดสอบระบบ 28 ฟังก์ชัน (Test Suite Results)
 
 สามารถทดสอบการทำงานของระบบทั้งหมดผ่านคำสั่ง:
 ```bash
 python tests/test_all_features.py
 ```
 
-### สรุปผลการทดสอบ (27/27 Tests Passed - 100%):
+### สรุปผลการทดสอบ (28/28 Tests Passed - 100%):
 ```text
 ================================================================================
           NETCONFIG TRACER STUDIO - AUTOMATED TEST SUITE v3
 ================================================================================
- [1/27]  Device Inventory (List)                  ... [ PASS ]
- [2/27]  Device Inventory (Add/Remove)            ... [ PASS ]
- [3/27]  Device Connection (R1, R2, R3)           ... [ PASS ]
- [4/27]  Active Connections Pool                  ... [ PASS ]
- [5/27]  Interfaces List (Parsing & Schema)       ... [ PASS ]
- [6/27]  Interface Configure (Live Set Status)    ... [ PASS ]
- [7/27]  Routing Preview (Static Route)           ... [ PASS ]
- [8/27]  Routing Preview (OSPF)                   ... [ PASS ]
- [9/27]  Routing Preview (RIP)                    ... [ PASS ]
- [10/27] Routing Preview (EIGRP)                  ... [ PASS ]
- [11/27] Routing Preview (BGP)                    ... [ PASS ]
- [12/27] Routing Apply (Live Push & Revert)       ... [ PASS ]
- [13/27] Show Command Execution (show ip route)   ... [ PASS ]
- [14/27] Freeform CLI Execution                   ... [ PASS ]
- [15/27] Topology Auto-Discovery (Real Links)     ... [ PASS ]
- [16/27] Front Panel Port Data                    ... [ PASS ]
- [17/27] Command Suggestions (Fuzzy Autocomplete) ... [ PASS ]
- [18/27] Command Normalization Engine             ... [ PASS ]
- [19/27] Virtual PC Config (Set IP & Gateway)     ... [ PASS ]
- [20/27] Virtual PC Ping via Router Proxy         ... [ PASS ]
- [21/27] Direct ICMP Ping Check Endpoint          ... [ PASS ]
- [22/27] Interface Up/Down State Toggle           ... [ PASS ]
- [23/27] Direct Interface Config Endpoint        ... [ PASS ]
- [24/27] Routing Redistribution Preview           ... [ PASS ]
- [25/27] Topology Interfaces Diagnostics          ... [ PASS ]
- [26/27] EVE-NG Direct Import Endpoint            ... [ PASS ]
- [27/27] Interface DHCP Configuration             ... [ PASS ]
+ [1/28]  Device Inventory (List)                  ... [ PASS ]
+ [2/28]  Device Inventory (Add/Remove)            ... [ PASS ]
+ [3/28]  Device Connection (R1, R2, R3)           ... [ PASS ]
+ [4/28]  Active Connections Pool                  ... [ PASS ]
+ [5/28]  Interfaces List (Parsing & Schema)       ... [ PASS ]
+ [6/28]  Interface Configure (Live Set Status)    ... [ PASS ]
+ [7/28]  Routing Preview (Static Route)           ... [ PASS ]
+ [8/28]  Routing Preview (OSPF)                   ... [ PASS ]
+ [9/28]  Routing Preview (RIP)                    ... [ PASS ]
+ [10/28] Routing Preview (EIGRP)                  ... [ PASS ]
+ [11/28] Routing Preview (BGP)                    ... [ PASS ]
+ [12/28] Routing Apply (Live Push & Revert)       ... [ PASS ]
+ [13/28] Show Command Execution (show ip route)   ... [ PASS ]
+ [14/28] Freeform CLI Execution                   ... [ PASS ]
+ [15/28] Topology Auto-Discovery (Real Links)     ... [ PASS ]
+ [16/28] Front Panel Port Data                    ... [ PASS ]
+ [17/28] Command Suggestions (Fuzzy Autocomplete) ... [ PASS ]
+ [18/28] Command Normalization Engine             ... [ PASS ]
+ [19/28] Virtual PC Config (Set IP & Gateway)     ... [ PASS ]
+ [20/28] Virtual PC Ping via Router Proxy         ... [ PASS ]
+ [21/28] Direct ICMP Ping Check Endpoint          ... [ PASS ]
+ [22/28] Interface Up/Down State Toggle           ... [ PASS ]
+ [23/28] Direct Interface Config Endpoint        ... [ PASS ]
+ [24/28] Routing Redistribution Preview           ... [ PASS ]
+ [25/28] Topology Interfaces Diagnostics          ... [ PASS ]
+ [26/28] EVE-NG Direct Import Endpoint            ... [ PASS ]
+ [27/28] Interface DHCP Configuration             ... [ PASS ]
+ [28/28] Interface No IP Configuration            ... [ PASS ]
 ================================================================================
- ALL 27 TESTS PASSED! (100% SUCCESS RATE)
+ ALL 28 TESTS PASSED! (100% SUCCESS RATE)
 ================================================================================
 ```
 
@@ -255,4 +259,4 @@ python tests/test_all_features.py
 ## เอกสารอ้างอิงและประวัติรุ่น (Version History & Specs)
 - **v1**: [assignment-2-network-automation-ui-spec.md](assignment-2-network-automation-ui-spec.md) — ข้อกำหนด UI และโครงร่างเริ่มต้น
 - **v2**: [assignment-2-v2-network-automation-ui-spec.md](assignment-2-v2-network-automation-ui-spec.md) — การขยายผลการตั้งค่า Routing และ CLI Normalizer
-- **v3 (Latest)**: [assignment-2-v3-network-automation-ui-spec.md](assignment-2-v3-network-automation-ui-spec.md) — สถาปัตยกรรมปฏิบัติการจริง, MultiGraph Auto-Discovery, Auto-Reconnect, DHCP Client Mode และชุดทดสอบ 27 รายการ
+- **v3 (Latest)**: [assignment-2-v3-network-automation-ui-spec.md](assignment-2-v3-network-automation-ui-spec.md) — สถาปัตยกรรมปฏิบัติการจริง, MultiGraph Auto-Discovery, Auto-Reconnect, DHCP Client Mode และชุดทดสอบ 28 รายการ

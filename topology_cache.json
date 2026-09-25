@@ -1,0 +1,88 @@
+{
+  "nodes": [
+    {
+      "id": "R1",
+      "name": "R1",
+      "type": "router",
+      "ip": "192.168.74.133",
+      "model": "L3-ADVENTERPRISEK9-M-15.4-2T.bin",
+      "status": "connected"
+    },
+    {
+      "id": "R2",
+      "name": "R2",
+      "type": "router",
+      "ip": "192.168.74.131",
+      "model": "L3-ADVENTERPRISEK9-M-15.4-2T.bin",
+      "status": "discovered"
+    },
+    {
+      "id": "R3",
+      "name": "R3",
+      "type": "router",
+      "ip": "192.168.74.131",
+      "model": "L3-ADVENTERPRISEK9-M-15.4-2T.bin",
+      "status": "discovered"
+    },
+    {
+      "id": "Net",
+      "name": "Net",
+      "type": "network",
+      "ip": "192.168.74.0/24",
+      "model": "cloud",
+      "status": "discovered"
+    }
+  ],
+  "edges": [
+    {
+      "from": "R1",
+      "to": "Net",
+      "from_port": "Ethernet0/0",
+      "to_port": "",
+      "status": "up",
+      "method": "eveng",
+      "from_ip": "192.168.74.133"
+    },
+    {
+      "from": "R1",
+      "to": "R2",
+      "from_port": "Ethernet0/1",
+      "to_port": "Ethernet0/1",
+      "status": "up",
+      "method": "eveng",
+      "from_ip": "192.168.75.1"
+    },
+    {
+      "from": "R1",
+      "to": "R3",
+      "from_port": "Ethernet0/3",
+      "to_port": "Ethernet0/3",
+      "status": "up",
+      "method": "eveng"
+    },
+    {
+      "from": "R2",
+      "to": "Net",
+      "from_port": "Ethernet0/0",
+      "to_port": "",
+      "status": "up",
+      "method": "eveng"
+    },
+    {
+      "from": "R2",
+      "to": "R3",
+      "from_port": "Ethernet0/2",
+      "to_port": "Ethernet0/2",
+      "status": "up",
+      "method": "eveng"
+    },
+    {
+      "from": "R3",
+      "to": "Net",
+      "from_port": "Ethernet0/0",
+      "to_port": "",
+      "status": "up",
+      "method": "eveng"
+    }
+  ]
+}

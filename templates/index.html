@@ -52,9 +52,12 @@
             <section class="topology-panel card">
                 <div class="panel-header">
                     <h3><i class="fa-solid fa-diagram-project"></i> Network Topology</h3>
-                    <div class="panel-actions">
+                    <div class="panel-actions" style="display:flex;align-items:center;gap:8px">
                         <span class="badge" id="node-count-badge">— Devices</span>
                         <span class="badge badge-success" id="edge-count-badge">— Links</span>
+                        <button class="btn btn-outline btn-sm" id="btn-refresh-topo" onclick="refreshTopology()" title="รีเฟรช Network Topology" style="padding:3px 10px;font-size:12px">
+                            <i class="fa-solid fa-arrows-rotate"></i> Refresh
+                        </button>
                     </div>
                 </div>
 
@@ -182,6 +185,10 @@
                                         <label class="radio-label" style="cursor:pointer; margin:0; font-size:12px;">
                                             <input type="radio" name="if-ip-mode" value="dhcp" onchange="toggleIpMode('dhcp')">
                                             <span>DHCP Client</span>
+                                        </label>
+                                        <label class="radio-label" style="cursor:pointer; margin:0; font-size:12px;">
+                                            <input type="radio" name="if-ip-mode" value="none" onchange="toggleIpMode('none')">
+                                            <span>No IP (no ip add)</span>
                                         </label>
                                     </div>
                                 </div>
@@ -460,42 +467,27 @@
 
                     <!-- ===== TAB 4: CLI Terminal ===== -->
                     <div id="tab-cli" class="tab-page">
-                        <div class="section-title">
-                            <h4><i class="fa-solid fa-terminal"></i> Interactive Cisco IOS Console</h4>
-                            <p>พิมพ์คำสั่ง Cisco IOS ตรง ๆ (รองรับคำสั่งย่อ เช่น <code>sh ip int br</code>)</p>
-                        </div>
-                        <div class="show-shortcut-bar">
-                            <button type="button" class="btn btn-outline btn-sm"
-                                onclick="runShowShortcut('show ip interface brief')">IP</button>
-                            <button type="button" class="btn btn-outline btn-sm"
-                                onclick="runShowShortcut('show running-config')">Running Config</button>
-                            <button type="button" class="btn btn-outline btn-sm"
-                                onclick="runShowShortcut('show ip route')">Routing Table</button>
-                            <button type="button" class="btn btn-outline btn-sm"
-                                onclick="runShowShortcut('show interfaces status')">Interface Status</button>
-                        </div>
-                        <div class="terminal-container console-mode" style="height:380px">
-                            <div class="terminal-header">
-                                <span id="cli-target-label"><i class="fa-solid fa-server"></i> Target: R1</span>
-                                <button class="btn-icon" onclick="clearConsole()"><i
-                                        class="fa-solid fa-trash"></i></button>
-                            </div>
-                            <div id="console-output" class="terminal-body console-body">
-                                <div class="line comment"># NetConfig Tracer Studio — Cisco IOS Console</div>
-                                <div class="line comment"># คำสั่งย่อ: sh ip int br, conf t, sh run, sh ip route, ...
+                        <div class="cisco-terminal-window">
+                            <div class="cisco-terminal-titlebar">
+                                <div class="cisco-titlebar-left">
+                                    <span class="cisco-win-dot close" onclick="clearConsole(event)" title="Clear Console"></span>
+                                    <span class="cisco-win-dot min"></span>
+                                    <span class="cisco-win-dot max"></span>
+                                    <span class="cisco-titlebar-text" id="cli-window-title"><i class="fa-solid fa-terminal"></i> Console - R1</span>
+                                </div>
+                                <div class="cisco-titlebar-actions">
+                                    <button type="button" class="cisco-btn-titlebar" onclick="clearConsole(event)" title="Clear screen"><i class="fa-solid fa-eraser"></i> Clear</button>
+                                    <button type="button" class="cisco-btn-titlebar" onclick="copyConsoleOutput(event)" title="Copy terminal text"><i class="fa-regular fa-copy"></i> Copy</button>
                                 </div>
                             </div>
-                            <div class="console-input-bar">
-                                <span class="prompt-symbol" id="cli-prompt">R1#</span>
-                                <div class="autocomplete-wrapper">
-                                    <input type="text" id="cli-input" class="console-input"
-                                        placeholder="Type Cisco IOS command..." onkeydown="handleCliKey(event)"
-                                        oninput="fetchSuggestions(this.value)" autocomplete="off">
-                                    <div id="autocomplete-dropdown" class="autocomplete-dropdown d-none"></div>
+                            <div class="cisco-terminal-viewport" id="console-output" onclick="focusCliInput()">
+                                <div id="cli-lines"></div>
+                                <div class="cisco-active-line" id="cli-active-line">
+                                    <span class="cisco-prompt-span" id="cli-prompt">R1#</span>
+                                    <input type="text" id="cli-input" class="cisco-pure-input"
+                                        autocomplete="off" spellcheck="false" autocapitalize="off"
+                                        onkeydown="handleCliKey(event)" autofocus>
                                 </div>
-                                <button class="btn btn-sm btn-primary" onclick="sendConsoleCmd()">
-                                    <i class="fa-solid fa-paper-plane"></i>
-                                </button>
                             </div>
                         </div>
                     </div>
@@ -581,14 +573,15 @@
                             </div>
 
                             <div class="conn-btn-group">
-                                <button type="button" class="btn btn-secondary" onclick="testPing()">
+                                <button type="button" class="btn btn-secondary" id="btn-test-ping" onclick="testPing()">
                                     <i class="fa-solid fa-satellite-dish"></i> Test Ping
                                 </button>
-                                <button type="submit" class="btn btn-primary" style="flex:1">
+                                <button type="submit" class="btn btn-primary" id="btn-connect" style="flex:1">
                                     <i class="fa-solid fa-plug"></i> Connect
                                 </button>
                             </div>
                             <div id="ping-result" class="ping-result-box d-none"></div>
+                            <div id="conn-result" class="conn-result-box d-none"></div>
                         </form>
 
                         <div class="connected-devices-section">
@@ -708,27 +701,44 @@ router ospf 1
                                 <option value="router">Router</option>
                                 <option value="switch">Switch</option>
                                 <option value="pc">Virtual PC</option>
+                                <option value="network">Network / Cloud (วง Network / Subnet)</option>
                                 <option value="firewall">Firewall</option>
                             </select>
                         </div>
                         <div class="form-group col">
                             <label>Connection Protocol</label>
-                            <select id="ad-proto" class="form-control">
+                            <select id="ad-proto" class="form-control" onchange="onAddDeviceProtoChange()">
                                 <option value="SSH">SSH</option>
-                                <option value="TELNET">Telnet</option>
-                                <option value="SERIAL">Serial</option>
+                                <option value="TELNET">Telnet (EVE-NG / Console)</option>
+                                <option value="SERIAL">Serial (COM Port / สาย Console จริง)</option>
                             </select>
                         </div>
                     </div>
+                    <div id="ad-proto-hint" class="form-hint mb-1 text-muted" style="font-size:11.5px; margin-top:-6px;"></div>
                     <div id="ad-network-fields">
-                        <div class="form-row">
+                        <div class="form-row" id="ad-ip-port-row">
                             <div class="form-group col-8">
-                                <label>IP Address</label>
+                                <label id="ad-ip-label">IP Address / Host</label>
                                 <input type="text" id="ad-ip" class="form-control" placeholder="192.168.1.120">
                             </div>
                             <div class="form-group col-4">
-                                <label>Port</label>
-                                <input type="number" id="ad-port" class="form-control" value="22">
+                                <label id="ad-port-label">Port</label>
+                                <input type="number" id="ad-port" class="form-control" value="22" placeholder="22">
+                            </div>
+                        </div>
+                        <div class="form-row d-none" id="ad-serial-row">
+                            <div class="form-group col-7">
+                                <label>Serial Port (COM Port)</label>
+                                <input type="text" id="ad-serial-port" class="form-control" placeholder="COM3 หรือ /dev/ttyUSB0" value="COM1">
+                            </div>
+                            <div class="form-group col-5">
+                                <label>Baud Rate</label>
+                                <select id="ad-baud" class="form-control">
+                                    <option value="9600" selected>9600 (Cisco Standard)</option>
+                                    <option value="115200">115200</option>
+                                    <option value="57600">57600</option>
+                                    <option value="38400">38400</option>
+                                </select>
                             </div>
                         </div>
                         <div class="form-row d-none" id="ad-pc-fields">
@@ -762,17 +772,30 @@ router ospf 1
 
     <!-- ===== MODAL: EVE-NG Import ===== -->
     <div id="eveng-modal" class="modal-backdrop">
-        <div class="modal-card" style="max-width:480px">
+        <div class="modal-card" style="max-width:500px">
             <div class="modal-header">
                 <div class="modal-title"><i class="fa-solid fa-cloud-arrow-down"></i> Import Topology from EVE-NG</div>
                 <button class="modal-close-btn" onclick="closeModal('eveng-modal')">&times;</button>
             </div>
             <div class="modal-body">
-                <div class="form-group"><label>EVE-NG Host</label>
-                    <input type="text" id="eveng-host" class="form-control" placeholder="192.168.1.50">
+                <div class="form-group">
+                    <label>EVE-NG Host</label>
+                    <div style="display:flex;gap:8px">
+                        <input type="text" id="eveng-host" class="form-control" placeholder="192.168.74.131" value="192.168.74.131">
+                        <button type="button" class="btn btn-secondary btn-sm" id="btn-fetch-labs" onclick="fetchEvengLabs()" title="ค้นหา Lab ทั้งหมดใน EVE-NG" style="white-space:nowrap">
+                            <i class="fa-solid fa-magnifying-glass"></i> ค้นหา Lab
+                        </button>
+                    </div>
                 </div>
-                <div class="form-group"><label>Lab Path</label>
-                    <input type="text" id="eveng-lab" class="form-control" placeholder="folder/lab.unl">
+                <div class="form-group">
+                    <label>Lab Path / เลือกไฟล์ Lab</label>
+                    <select id="eveng-lab-select" class="form-control d-none mb-1" onchange="onEvengLabSelectChange()">
+                        <option value="">— เลือก Lab จากรายการที่พบ —</option>
+                    </select>
+                    <input type="text" id="eveng-lab" class="form-control" placeholder="Test.unl" value="Test.unl">
+                    <small class="form-hint" style="font-size:11px;color:var(--text-muted);margin-top:3px;display:block">
+                        ระบุชื่อไฟล์ Lab เช่น <code>Test.unl</code> (หรือกดปุ่ม <strong>"ค้นหา Lab"</strong> เพื่อเลือกจากรายการ)
+                    </small>
                 </div>
                 <div class="form-row">
                     <div class="form-group col"><label>Username</label>
@@ -782,8 +805,9 @@ router ospf 1
                         <input type="password" id="eveng-pass" class="form-control" value="eve">
                     </div>
                 </div>
-                <button type="button" class="btn btn-primary btn-block" onclick="importEvengTopology()">
-                    <i class="fa-solid fa-download"></i> Import
+                <div id="eveng-import-status" class="conn-result-box d-none" style="margin-bottom:12px"></div>
+                <button type="button" class="btn btn-primary btn-block" id="btn-eveng-import" onclick="importEvengTopology()">
+                    <i class="fa-solid fa-download"></i> Import Topology
                 </button>
             </div>
         </div>
