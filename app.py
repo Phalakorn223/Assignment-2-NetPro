@@ -798,31 +798,6 @@ def get_model_interfaces(model_name):
 # ===========================================================================
 # Routes — Interface CRUD (spec v3 section 3.2)
 # ===========================================================================
-@app.route("/api/devices/<device_id>/interfaces", methods=["GET"])
-def get_device_interfaces(device_id):
-    """คืน interfaces ทั้งหมดของ device"""
-    dev = get_device_by_id(device_id)
-    if not dev:
-        # ลอง demo devices
-        demo_dev = DEMO_DEVICES.get(device_id)
-        if not demo_dev:
-            return jsonify({"success": False, "message": f"Device '{device_id}' ไม่พบ"}), 404
-        ifaces = []
-        for if_name, if_info in demo_dev.get("interfaces", {}).items():
-            ifaces.append({
-                "name": if_name,
-                "ip": if_info.get("ip", "unassigned"),
-                "mask": if_info.get("mask", ""),
-                "status": if_info.get("status", "down"),
-                "description": if_info.get("description"),
-            })
-        return jsonify({"success": True, "device_id": device_id, "interfaces": ifaces})
-
-    return jsonify({
-        "success": True,
-        "device_id": device_id,
-        "interfaces": dev.get("interfaces", []),
-    })
 
 
 @app.route("/api/devices/<device_id>/interfaces", methods=["POST"])

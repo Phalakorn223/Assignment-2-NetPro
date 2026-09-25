@@ -35,12 +35,13 @@ document.addEventListener("DOMContentLoaded", () => {
 function switchTab(tabId) {
     document.querySelectorAll(".tab-btn").forEach(b => b.classList.remove("active"));
     document.querySelectorAll(".tab-page").forEach(p => p.classList.remove("active"));
-    document.getElementById(tabId).classList.add("active");
+    const page = document.getElementById(tabId);
+    if (page) page.classList.add("active");
     const btnId = "btn-" + tabId;
     const btn = document.getElementById(btnId);
     if (btn) btn.classList.add("active");
-    if (tabId === "tab-if") {
-        refreshInterfaceTable();
+    if (tabId === "tab-interface" || tabId === "tab-if") {
+        refreshInterfaceTable(false);
     }
 }
 
@@ -71,6 +72,7 @@ function renderInventoryList() {
     }
     inventoryDevices.forEach(dev => {
         const item = document.createElement("div");
+        item.dataset.deviceId = dev.id;
         item.className = "inventory-item" + (dev.id === activeDeviceId ? " active" : "");
         // Show IP:Port for EVE-NG console devices (port > 1000 and same IP pattern)
         const port = dev.port || 0;
@@ -89,6 +91,13 @@ function renderInventoryList() {
             selectActiveDevice(dev.id);
         });
         list.appendChild(item);
+    });
+}
+
+function updateInventoryActiveState() {
+    document.querySelectorAll(".inventory-item").forEach(item => {
+        const devId = item.dataset.deviceId;
+        item.classList.toggle("active", devId === activeDeviceId);
     });
 }
 
@@ -111,23 +120,31 @@ function populateDeviceSelects() {
 }
 
 function selectActiveDevice(deviceId) {
+    if (!deviceId) return;
     const dev = inventoryDevices.find(d => d.id === deviceId || d.name === deviceId || String(d.id) === String(deviceId));
-    if (dev) {
-        activeDeviceId = dev.id;
-    } else {
-        activeDeviceId = deviceId;
-    }
+    const targetId = dev ? dev.id : deviceId;
+    activeDeviceId = targetId;
+
     const sel = document.getElementById("active-device-select");
     if (sel && dev) sel.value = dev.id;
+
+    updateInventoryActiveState();
     updatePromptLabel();
     updateInterfaceOptions();
+
+    // Select node on vis.js network canvas
+    if (network) {
+        try { network.selectNodes([activeDeviceId]); } catch (_) {}
+    }
+
+    // Force refresh interfaces for the newly selected device
+    refreshInterfaceTable(true);
 }
 
 function onActiveDeviceChange() {
-    activeDeviceId = document.getElementById("active-device-select").value;
-    updatePromptLabel();
-    updateInterfaceOptions();
-    refreshInterfaceTable();
+    const sel = document.getElementById("active-device-select");
+    if (!sel || !sel.value) return;
+    selectActiveDevice(sel.value);
     appendConsole(`# Switched target to ${activeDeviceId}`, "comment");
 }
 
@@ -1163,16 +1180,65 @@ function showNotification(message, type = "info") {
 // =============================================================================
 // INTERFACE TABLE — Refresh, Select, Up/Down
 // =============================================================================
+function populateInterfaceForm(iface) {
+    if (!iface) return;
+    const ifSelect = document.getElementById("if-select");
+    if (ifSelect && ifSelect.value !== iface.name) {
+        ifSelect.value = iface.name;
+    }
+
+    const ipInput = document.getElementById("if-ip");
+    const maskInput = document.getElementById("if-mask");
+    const descInput = document.getElementById("if-desc");
+
+    if (iface.ip && (iface.ip.toLowerCase().includes("dhcp") || iface.method === "DHCP")) {
+        toggleIpMode("dhcp");
+    } else if (iface.ip && iface.ip !== "unassigned") {
+        toggleIpMode("static");
+        if (ipInput) ipInput.value = iface.ip;
+        if (maskInput) maskInput.value = iface.mask || "255.255.255.0";
+    } else {
+        toggleIpMode("static");
+        if (ipInput) ipInput.value = "";
+        if (maskInput) maskInput.value = "255.255.255.0";
+    }
+
+    if (descInput) descInput.value = iface.description || "";
+
+    const stateRadio = document.querySelector(`input[name='if-state'][value='${iface.status === "up" ? "up" : "down"}']`);
+    if (stateRadio) stateRadio.checked = true;
+
+    updateIfPreview();
+}
+
+function selectInterfaceRow(iface, tr) {
+    if (!iface) return;
+    selectedInterfaceName = iface.name;
+
+    const tbody = document.getElementById("interface-table-body");
+    if (tbody) {
+        tbody.querySelectorAll("tr").forEach(r => r.classList.remove("active-row"));
+        if (tr) {
+            tr.classList.add("active-row");
+        } else {
+            const matchingTr = tbody.querySelector(`tr[data-if-name="${iface.name}"]`);
+            if (matchingTr) matchingTr.classList.add("active-row");
+        }
+    }
+
+    populateInterfaceForm(iface);
+}
+
 async function refreshInterfaceTable(force = false) {
     const tbody = document.getElementById("interface-table-body");
     if (!tbody) return;
-    tbody.innerHTML = '<tr><td colspan="4" class="text-muted"><i class="fa-solid fa-spinner fa-spin"></i> Loading interfaces...</td></tr>';
+    tbody.innerHTML = `<tr><td colspan="4" class="text-muted"><i class="fa-solid fa-spinner fa-spin"></i> Loading interfaces for <strong>${activeDeviceId}</strong>...</td></tr>`;
     try {
         const url = `/api/devices/${activeDeviceId}/interfaces${force ? '?force=1' : ''}`;
         const res = await fetch(url);
         const data = await res.json();
         if (!data.success || !data.interfaces || !data.interfaces.length) {
-            tbody.innerHTML = '<tr><td colspan="4" class="text-muted">No interface data available</td></tr>';
+            tbody.innerHTML = `<tr><td colspan="4" class="text-muted">No interface data available for ${activeDeviceId}</td></tr>`;
             return;
         }
         tbody.innerHTML = "";
@@ -1182,11 +1248,11 @@ async function refreshInterfaceTable(force = false) {
         if (ifSelect) {
             ifSelect.innerHTML = "";
         }
+
         data.interfaces.forEach(iface => {
             // Add table row
             const tr = document.createElement("tr");
             tr.dataset.ifName = iface.name;
-            tr.className = (iface.name === selectedInterfaceName) ? "active-row" : "";
             const statusClass = iface.status === "up" ? "text-success" : "text-danger";
             const protocolClass = (iface.protocol || "down") === "up" ? "text-success" : "text-danger";
             tr.innerHTML = `
@@ -1195,30 +1261,9 @@ async function refreshInterfaceTable(force = false) {
                 <td><span class="${statusClass}">${(iface.status || 'down').toUpperCase()}</span></td>
                 <td><span class="${protocolClass}">${(iface.protocol || 'down').toUpperCase()}</span></td>
             `;
+
             tr.addEventListener("click", () => {
-                selectedInterfaceName = iface.name;
-                // Highlight this row
-                tbody.querySelectorAll("tr").forEach(r => r.classList.remove("active-row"));
-                tr.classList.add("active-row");
-                // Sync dropdown
-                if (ifSelect) ifSelect.value = iface.name;
-                // Pre-fill IP/mask or DHCP
-                const ipInput = document.getElementById("if-ip");
-                const maskInput = document.getElementById("if-mask");
-                if (iface.ip && (iface.ip.toLowerCase().includes("dhcp") || iface.method === "DHCP")) {
-                    toggleIpMode("dhcp");
-                } else if (iface.ip && iface.ip !== "unassigned") {
-                    toggleIpMode("static");
-                    if (ipInput) ipInput.value = iface.ip;
-                    if (maskInput) maskInput.value = "255.255.255.0";
-                } else {
-                    toggleIpMode("static");
-                    if (ipInput) ipInput.value = "";
-                }
-                // Set state radio
-                const stateRadio = document.querySelector(`input[name='if-state'][value='${iface.status === "up" ? "up" : "down"}']`);
-                if (stateRadio) stateRadio.checked = true;
-                updateIfPreview();
+                selectInterfaceRow(iface, tr);
             });
             tbody.appendChild(tr);
 
@@ -1227,11 +1272,21 @@ async function refreshInterfaceTable(force = false) {
                 const opt = document.createElement("option");
                 opt.value = iface.name;
                 opt.textContent = iface.name;
-                if (iface.name === selectedInterfaceName) opt.selected = true;
                 ifSelect.appendChild(opt);
             }
         });
-        updateIfPreview();
+
+        // Auto select either previously selected interface if on this router, or the first interface
+        let toSelect = data.interfaces.find(i => i.name === selectedInterfaceName);
+        if (!toSelect && data.interfaces.length > 0) {
+            toSelect = data.interfaces[0];
+        }
+        if (toSelect) {
+            selectInterfaceRow(toSelect);
+        } else {
+            updateIfPreview();
+        }
+
     } catch (e) {
         console.error("Interface table refresh error:", e);
         tbody.innerHTML = '<tr><td colspan="4" class="text-danger">Failed to load interfaces</td></tr>';
@@ -1282,6 +1337,14 @@ function syncSelectedInterfaceRow() {
     const ifName = document.getElementById("if-select")?.value;
     if (!ifName) return;
     selectedInterfaceName = ifName;
+    const cached = cachedInterfaces[activeDeviceId];
+    if (cached && cached.length) {
+        const found = cached.find(i => i.name === ifName);
+        if (found) {
+            selectInterfaceRow(found);
+            return;
+        }
+    }
     const tbody = document.getElementById("interface-table-body");
     if (tbody) {
         tbody.querySelectorAll("tr").forEach(tr => {

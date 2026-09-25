@@ -123,13 +123,17 @@ def save_inventory(devices: list):
 def add_device_to_inventory(device: dict) -> dict:
     """เพิ่ม device ใหม่ ให้ id อัตโนมัติ"""
     devices = load_inventory()
-    # กำหนด ID ถ้าไม่มี
+    # กำหนด ID ถ้าไม่มี โดยใช้ name เป็นอันดับแรก
     if not device.get("id"):
+        name = device.get("name")
         existing_ids = [d.get("id", "") for d in devices]
-        count = 1
-        while f"device-{count}" in existing_ids:
-            count += 1
-        device["id"] = f"device-{count}"
+        if name and name not in existing_ids:
+            device["id"] = name
+        else:
+            count = 1
+            while f"device-{count}" in existing_ids:
+                count += 1
+            device["id"] = f"device-{count}"
     devices.append(device)
     save_inventory(devices)
     return device
@@ -139,7 +143,7 @@ def remove_device_from_inventory(device_id: str) -> bool:
     """ลบ device จาก inventory"""
     devices = load_inventory()
     original_len = len(devices)
-    devices = [d for d in devices if d.get("id") != device_id]
+    devices = [d for d in devices if d.get("id") != device_id and d.get("name") != device_id]
     if len(devices) < original_len:
         save_inventory(devices)
         return True
@@ -148,7 +152,7 @@ def remove_device_from_inventory(device_id: str) -> bool:
 
 def get_device_by_id(device_id: str) -> Optional[dict]:
     devices = load_inventory()
-    return next((d for d in devices if d.get("id") == device_id), None)
+    return next((d for d in devices if d.get("id") == device_id or d.get("name") == device_id), None)
 
 
 # ---------------------------------------------------------------------------
@@ -301,6 +305,11 @@ class ConnectionManager:
 
         try:
             if conn_type in ("SSH", "TELNET"):
+                try:
+                    if hasattr(handler, "check_config_mode") and handler.check_config_mode():
+                        handler.exit_config_mode()
+                except Exception:
+                    pass
                 output = handler.send_command(command, use_textfsm=use_textfsm)
                 # ตรวจ IOS syntax error
                 if isinstance(output, str) and re.search(r"% Invalid input detected at", output):
