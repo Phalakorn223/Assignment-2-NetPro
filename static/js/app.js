@@ -732,15 +732,24 @@ async function runAutoDiscovery() {
     const loading = document.getElementById("topo-loading");
     if (loading) loading.classList.remove("d-none");
     try {
-        const res = await fetch("/api/topology/json");
+        const res = await fetch("/api/topology/json?refresh=1");
         const data = await res.json();
         if (data.success) {
             renderVisNetwork(data.nodes || [], data.edges || []);
-            document.getElementById("node-count-badge").textContent = `${(data.nodes || []).length} Devices`;
-            document.getElementById("edge-count-badge").textContent = `${(data.edges || []).length} Links`;
+            const nodeBadge = document.getElementById("node-count-badge");
+            const edgeBadge = document.getElementById("edge-count-badge");
+            if (nodeBadge) nodeBadge.textContent = `${(data.nodes || []).length} Devices`;
+            if (edgeBadge) edgeBadge.textContent = `${(data.edges || []).length} Links`;
+            showNotification(`Auto-Discover สำเร็จ (${(data.nodes || []).length} Devices, ${(data.edges || []).length} Links)`, "success");
+        } else {
+            showNotification("Auto-Discovery ไม่พบข้อมูล", "warning");
         }
-    } catch (e) { console.error("Auto-discovery failed:", e); }
-    finally { if (loading) loading.classList.add("d-none"); }
+    } catch (e) {
+        console.error("Auto-discovery failed:", e);
+        showNotification(`Auto-Discovery ล้มเหลว: ${e.message}`, "error");
+    } finally {
+        if (loading) loading.classList.add("d-none");
+    }
 }
 
 async function refreshTopology() {
@@ -813,7 +822,7 @@ function renderVisNetwork(nodes, edges) {
                 .replace("Serial", "Se");
     };
 
-    const visEdges = new vis.DataSet(edges.map(e => {
+    const visEdges = new vis.DataSet(edges.map((e, idx) => {
         let label = "";
         let fromPart = formatPort(e.from_port);
         let toPart = formatPort(e.to_port);
@@ -837,12 +846,14 @@ function renderVisNetwork(nodes, edges) {
         if (e.subnet) title += `\nSubnet: ${e.subnet}`;
         if (e.method) title += `\nDiscovery: ${e.method}`;
         return {
+            id: `edge_${e.from}_${e.to}_${idx}`,
             from: e.from, to: e.to,
             label: label,
             title: title,
             color: { color: e.status === "up" ? "#10b981" : "#ef4444", highlight: "#38bdf8" },
             dashes: Boolean(e.from_port && e.from_port.includes("Serial")),
             width: 2.5,
+            smooth: { enabled: true, type: 'curvedCW', roundness: 0.15 * (idx % 2 === 0 ? 1 : -1) },
             font: {
                 color: "#cbd5e1",
                 size: 9.5,

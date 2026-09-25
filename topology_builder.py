@@ -88,28 +88,67 @@ def collect_device_interfaces(conn_manager, device_id: str) -> list:
 
     # ลอง show ip interface brief + show ip interface ก่อน เพื่อดึง mask ด้วย
     result = conn_manager.send_command(device_id, "show ip interface brief")
-    if not result.get("success"):
-        return []
+    if result.get("success"):
+        output = result.get("output", "")
+        brief_entries = _parse_ip_int_brief(output)
+        if brief_entries:
+            # ดึง mask จาก show ip interface (เพื่อให้ subnet matching แม่นยำกว่า /24 เดา)
+            mask_result = conn_manager.send_command(device_id, "show ip interface")
+            mask_map = {}
+            if mask_result.get("success"):
+                mask_map = _parse_ip_interface_masks(mask_result.get("output", ""))
 
-    output = result.get("output", "")
-    brief_entries = _parse_ip_int_brief(output)
+            enriched = []
+            for ip, if_name, status in brief_entries:
+                mask = mask_map.get(if_name, "255.255.255.0")
+                enriched.append({
+                    "name": if_name,
+                    "ip": ip,
+                    "mask": mask,
+                    "status": status,
+                })
+            return enriched
 
-    # ดึง mask จาก show ip interface (เพื่อให้ subnet matching แม่นยำกว่า /24 เดา)
-    mask_result = conn_manager.send_command(device_id, "show ip interface")
-    mask_map = {}
-    if mask_result.get("success"):
-        mask_map = _parse_ip_interface_masks(mask_result.get("output", ""))
+    # Fallback สำหรับ Linux PC: ip -br addr หรือ ip -o addr
+    for linux_cmd in ["ip -br addr", "ip -o addr"]:
+        linux_res = conn_manager.send_command(device_id, linux_cmd)
+        if linux_res.get("success") and linux_res.get("output"):
+            linux_entries = _parse_linux_ip_br(linux_res.get("output", ""))
+            if linux_entries:
+                return linux_entries
 
-    enriched = []
-    for ip, if_name, status in brief_entries:
-        mask = mask_map.get(if_name, "255.255.255.0")
-        enriched.append({
-            "name": if_name,
-            "ip": ip,
-            "mask": mask,
-            "status": status,
-        })
-    return enriched
+    return []
+
+
+def _parse_linux_ip_br(raw_output: str) -> list:
+    """
+    Parse Linux 'ip -br addr' output:
+    ens3             UP             192.168.80.139/24 fe80::5054:ff:fe12:3456/64
+    lo               UNKNOWN        127.0.0.1/8 ::1/128
+    """
+    results = []
+    for line in raw_output.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        parts = line.split()
+        if len(parts) >= 2:
+            if_name = parts[0]
+            status_raw = parts[1].lower()
+            status = "up" if status_raw in ("up", "unknown") else "down"
+
+            m = re.search(r"\b(\d+\.\d+\.\d+\.\d+)/(\d+)\b", line)
+            if m:
+                ip = m.group(1)
+                prefix = int(m.group(2))
+                mask = _prefix_to_mask(prefix)
+                results.append({
+                    "name": if_name,
+                    "ip": ip,
+                    "mask": mask,
+                    "status": status,
+                })
+    return results
 
 
 def _parse_ip_interface_masks(raw_output: str) -> dict:
@@ -199,6 +238,23 @@ def build_topology_graph(conn_manager, device_ids: list, inventory_devices: list
                     primary_ips[device_id] = ip
                     break
 
+    # เสริม interface จาก inventory_devices สำหรับอุปกรณ์ที่ยังไม่มี interface (เช่น Virtual PC หรือโหนดออฟไลน์)
+    if inventory_devices:
+        for dev in inventory_devices:
+            dev_id = dev.get("id", "")
+            if dev_id not in all_device_interfaces or not all_device_interfaces[dev_id]:
+                dev_ip = (dev.get("ip") or "").strip()
+                dev_mask = (dev.get("mask") or "255.255.255.0").strip()
+                if dev_ip and dev_ip not in ("127.0.0.1", "localhost", "unassigned", "-"):
+                    all_device_interfaces[dev_id] = [{
+                        "name": "ens3" if dev.get("device_type_label") == "pc" else "Ethernet0/0",
+                        "ip": dev_ip,
+                        "mask": dev_mask if dev_mask else "255.255.255.0",
+                        "status": "up" if conn_manager.is_connected(dev_id) else "discovered"
+                    }]
+                    if dev_id not in primary_ips:
+                        primary_ips[dev_id] = dev_ip
+
     # ----- ขั้นตอน 1: ลอง EVE-NG Auto-Discovery ก่อน -----
     try:
         from eve_ng_client import auto_discover_eveng
@@ -247,8 +303,7 @@ def build_topology_graph(conn_manager, device_ids: list, inventory_devices: list
             "status": "connected" if conn_manager.is_connected(dev_id) else "disconnected",
         })
 
-    # CDP Discovery (จับคู่ข้ามเครื่องด้วย IP จริง)
-    cdp_edges_found = False
+    # 1. CDP / LLDP Discovery (จับคู่ข้ามเครื่องด้วย IP จริง)
     for device_id in device_ids:
         if not conn_manager.is_connected(device_id):
             continue
@@ -287,10 +342,9 @@ def build_topology_graph(conn_manager, device_ids: list, inventory_devices: list
                            remote_ip=remote_ip,
                            status="up",
                            method="cdp")
-                cdp_edges_found = True
 
-    # Subnet-matching (ใช้ Subnet Overlap Clustering)
-    if not cdp_edges_found and all_device_interfaces:
+    # 2. Subnet-matching: สำคัญมาก! ต้องรันเสมอ ไม่ให้ CDP มากดทับ เพื่อเชื่อมต่อสายในทุก subnet
+    if all_device_interfaces:
         G = _smart_subnet_matching(G, all_device_interfaces, primary_ips)
 
     return G
@@ -379,18 +433,27 @@ def _smart_subnet_matching(G, all_device_interfaces: dict, primary_ips: dict = N
         if len(unique_devs) < 2:
             continue
 
-        if len(unique_devs) == 2 and len(c) == 2:
-            # Point-to-point link (เช่น e0/1 บน R1 ชนกับ e0/1 บน R2)
-            m1 = c[0]
-            m2 = c[1]
-            G.add_edge(m1["dev"], m2["dev"],
-                       local_port=m1["if_name"],
-                       remote_port=m2["if_name"],
-                       local_ip=m1["ip"],
-                       remote_ip=m2["ip"],
-                       subnet=str(m1["network"]),
-                       status="up",
-                       method="subnet_match")
+        if len(unique_devs) == 2:
+            # Point-to-point link ระหว่าง 2 อุปกรณ์ใน subnet นี้
+            m1 = next(m for m in c if m["dev"] == unique_devs[0])
+            m2 = next(m for m in c if m["dev"] == unique_devs[1])
+            edge_exists = False
+            if G.has_edge(m1["dev"], m2["dev"]):
+                for _, edge_data in G.get_edge_data(m1["dev"], m2["dev"]).items():
+                    if (edge_data.get("local_port") == m1["if_name"] and edge_data.get("remote_port") == m2["if_name"]) or \
+                       (edge_data.get("local_port") == m2["if_name"] and edge_data.get("remote_port") == m1["if_name"]) or \
+                       edge_data.get("subnet") == str(m1["network"]):
+                        edge_exists = True
+                        break
+            if not edge_exists:
+                G.add_edge(m1["dev"], m2["dev"],
+                           local_port=m1["if_name"],
+                           remote_port=m2["if_name"],
+                           local_ip=m1["ip"],
+                           remote_ip=m2["ip"],
+                           subnet=str(m1["network"]),
+                           status="up",
+                           method="subnet_match")
         else:
             # Multi-access segment (วง Network สำหรับแต่ละ Subnet เช่น 192.168.74.0/24, 10.0.0.0/24)
             net_ip = str(c[0]["network"])
@@ -400,14 +463,21 @@ def _smart_subnet_matching(G, all_device_interfaces: dict, primary_ips: dict = N
                 G.add_node(net_node_id, name=net_name, type="network",
                            ip=net_ip, model="cloud", status="discovered")
             for m in c:
-                G.add_edge(m["dev"], net_node_id,
-                           local_port=m["if_name"],
-                           remote_port="",
-                           local_ip=m["ip"],
-                           remote_ip="",
-                           subnet=net_ip,
-                           status="up",
-                           method="subnet_match")
+                edge_exists = False
+                if G.has_edge(m["dev"], net_node_id):
+                    for _, edge_data in G.get_edge_data(m["dev"], net_node_id).items():
+                        if edge_data.get("local_port") == m["if_name"]:
+                            edge_exists = True
+                            break
+                if not edge_exists:
+                    G.add_edge(m["dev"], net_node_id,
+                               local_port=m["if_name"],
+                               remote_port="",
+                               local_ip=m["ip"],
+                               remote_ip="",
+                               subnet=net_ip,
+                               status="up",
+                               method="subnet_match")
 
     return G
 

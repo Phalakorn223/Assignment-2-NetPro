@@ -49,7 +49,8 @@
     "password": "cisco",
     "mask": "255.255.255.0",
     "gateway": "",
-    "id": "R4"
+    "id": "R4",
+    "secret": "cisco"
   },
   {
     "name": "SW2",
