@@ -89,16 +89,6 @@
       "method": "subnet_match",
       "from_ip": "192.168.80.134",
       "subnet": "192.168.80.0/24"
-    },
-    {
-      "from": "SW2",
-      "to": "Net_192_168_80_0_24",
-      "from_port": "Vlan1",
-      "to_port": "",
-      "status": "up",
-      "method": "subnet_match",
-      "from_ip": "192.168.80.141",
-      "subnet": "192.168.80.0/24"
     }
   ]
 }
