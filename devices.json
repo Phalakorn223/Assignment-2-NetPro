@@ -77,5 +77,18 @@
     "gateway": "192.168.80.131",
     "id": "PC1",
     "secret": ""
+  },
+  {
+    "name": "R5",
+    "model": "",
+    "device_type_label": "router",
+    "connection_type": "SSH",
+    "ip": "192.168.80.250",
+    "port": 22,
+    "username": "cisco",
+    "password": "cisco",
+    "mask": "255.255.255.0",
+    "gateway": "",
+    "id": "R5"
   }
 ]
