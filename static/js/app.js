@@ -257,12 +257,14 @@ function setCliDirectPrompt(prompt) {
     const promptEl = document.getElementById("cli-prompt");
     if (promptEl) promptEl.textContent = getCliPrompt();
 
-    const match = cliDirectPrompt.match(/^([A-Za-z0-9_\-\.]+)/);
-    if (match) {
-        cliCustomHostname = match[1];
-        const winTitle = document.getElementById("cli-window-title");
-        if (winTitle) {
-            winTitle.innerHTML = `<i class="fa-solid fa-terminal"></i> Console - ${cliCustomHostname}`;
+    if (!cliIsPasswordMode && !cliDirectPrompt.toLowerCase().includes("password")) {
+        const match = cliDirectPrompt.match(/^([A-Za-z0-9_\-\.]+)/);
+        if (match) {
+            cliCustomHostname = match[1];
+            const winTitle = document.getElementById("cli-window-title");
+            if (winTitle) {
+                winTitle.innerHTML = `<i class="fa-solid fa-terminal"></i> Console - ${cliCustomHostname}`;
+            }
         }
     }
 }
@@ -300,6 +302,13 @@ function getCliPrompt() {
         const p = cliDirectPrompt.trim();
         return p.endsWith(" ") ? p : p + " ";
     }
+    const dev = inventoryDevices.find(d => d.id === activeDeviceId);
+    const isLinux = dev && (dev.device_type_label === "pc" || (dev.model || "").toLowerCase().includes("linux") || (dev.model || "").toLowerCase().includes("ubuntu"));
+    if (isLinux) {
+        const user = dev.username || "ubuntu";
+        const host = (dev.name || dev.id || "pc1").toLowerCase();
+        return `${user}@${host}:~$ `;
+    }
     const host = getCliHostname();
     if (cliMode === "user") return `${host}> `;
     if (cliMode === "config") return `${host}(config)# `;
@@ -329,7 +338,7 @@ function openAddDeviceModal() { document.getElementById("add-device-modal").clas
 async function submitAddDevice(e) {
     e.preventDefault();
     const dtype = document.getElementById("ad-type").value;
-    const proto = dtype === "pc" ? "PC" : document.getElementById("ad-proto").value;
+    const proto = document.getElementById("ad-proto").value || (dtype === "pc" ? "SSH" : "TELNET");
     const isSerial = proto === "SERIAL";
 
     const payload = {
@@ -378,12 +387,14 @@ async function deleteDevice(deviceId) {
 }
 
 function onAddDeviceTypeChange() {
-    const isPc = document.getElementById("ad-type").value === "pc";
+    const dtype = document.getElementById("ad-type").value;
+    const isPc = dtype === "pc";
+    const isNet = dtype === "network";
     document.getElementById("ad-pc-fields")?.classList.toggle("d-none", !isPc);
-    document.getElementById("ad-cred-fields")?.classList.toggle("d-none", isPc);
+    document.getElementById("ad-cred-fields")?.classList.toggle("d-none", isNet);
     const protoSel = document.getElementById("ad-proto");
-    if (protoSel) protoSel.closest(".form-group")?.classList.toggle("d-none", isPc);
-    if (!isPc) onAddDeviceProtoChange();
+    if (protoSel) protoSel.closest(".form-group")?.classList.toggle("d-none", isNet);
+    onAddDeviceProtoChange();
 }
 
 async function onAddDeviceProtoChange() {
@@ -1327,12 +1338,102 @@ function copyShowOutput() {
 }
 
 // =============================================================================
-// CISCO IOS PACKET TRACER REALTIME CLI & HELP GUIDE ENGINE
+// CISCO IOS & LINUX PC REALTIME CLI & HELP GUIDE ENGINE
 // =============================================================================
 let cliMode = "exec"; // "exec", "user", "config", "config_if", "config_router"
 let cliContext = [];  // context stack e.g. ["interface Ethernet0/0"]
 let cliSubmodeLabel = "";
 let cliCustomHostname = null;
+
+function isCurrentDeviceLinux() {
+    const dev = inventoryDevices.find(d => d.id === activeDeviceId);
+    return !!(dev && (dev.device_type_label === "pc" || (dev.model || "").toLowerCase().includes("linux") || (dev.model || "").toLowerCase().includes("ubuntu")));
+}
+
+const LINUX_HELP_DATABASE = {
+    title: "Linux / Ubuntu system & network commands:",
+    commands: [
+        { cmd: "ip", desc: "Show / manipulate routing, network devices, interfaces" },
+        { cmd: "ifconfig", desc: "Configure a network interface (net-tools)" },
+        { cmd: "ping", desc: "Send ICMP ECHO_REQUEST to network hosts" },
+        { cmd: "traceroute", desc: "Print the route packets trace to network host" },
+        { cmd: "sudo", desc: "Execute a command as another user / superuser" },
+        { cmd: "apt", desc: "Command-line package manager (install, update)" },
+        { cmd: "systemctl", desc: "Control the systemd system and service manager" },
+        { cmd: "cat", desc: "Concatenate files and print on the standard output" },
+        { cmd: "uname", desc: "Print system information (-a for kernel)" },
+        { cmd: "whoami", desc: "Print effective user ID" },
+        { cmd: "hostname", desc: "Show or set the system's host name (-I for IPs)" },
+        { cmd: "ss", desc: "Another utility to investigate sockets (-tuln)" },
+        { cmd: "netstat", desc: "Print network connections, routing tables" },
+        { cmd: "df", desc: "Report file system disk space usage (-h)" },
+        { cmd: "free", desc: "Display amount of free and used memory in the system (-m)" },
+        { cmd: "ps", desc: "Report a snapshot of the current processes (aux)" },
+        { cmd: "top", desc: "Display Linux processes" },
+        { cmd: "ls", desc: "List directory contents (-la)" },
+        { cmd: "pwd", desc: "Print name of current/working directory" },
+        { cmd: "clear", desc: "Clear the terminal screen" }
+    ],
+    sub: {
+        "ip": [
+            { cmd: "addr", desc: "Protocol address management (ip a / ip addr)" },
+            { cmd: "-br addr", desc: "Brief network addresses and status" },
+            { cmd: "route", desc: "Routing table management (ip r / ip route)" },
+            { cmd: "link", desc: "Network device configuration (ip link)" },
+            { cmd: "neigh", desc: "Neighbour / ARP table (ip neigh)" }
+        ],
+        "sudo": [
+            { cmd: "apt update", desc: "Update list of available packages" },
+            { cmd: "apt install net-tools", desc: "Install network utilities" },
+            { cmd: "systemctl status ssh", desc: "Check status of SSH daemon" },
+            { cmd: "systemctl restart ssh", desc: "Restart SSH service" },
+            { cmd: "-i", desc: "Simulate initial login (root shell)" }
+        ],
+        "cat": [
+            { cmd: "/etc/os-release", desc: "Operating system distribution information" },
+            { cmd: "/etc/netplan/*.yaml", desc: "Netplan network configuration file" },
+            { cmd: "/etc/resolv.conf", desc: "DNS resolver configuration" }
+        ],
+        "systemctl": [
+            { cmd: "status ssh", desc: "Check SSH server status" },
+            { cmd: "restart ssh", desc: "Restart SSH daemon" },
+            { cmd: "status networking", desc: "Check networking status" }
+        ]
+    }
+};
+
+function resolveLinuxHelp(buffer) {
+    let clean = (buffer || "").replace(/\?$/, "");
+    const trimmed = clean.trim();
+    if (!trimmed) {
+        return { title: LINUX_HELP_DATABASE.title, items: LINUX_HELP_DATABASE.commands };
+    }
+    const hasTrailingSpace = clean.endsWith(" ");
+    const lowerTrim = trimmed.toLowerCase();
+    if (LINUX_HELP_DATABASE.sub && LINUX_HELP_DATABASE.sub[lowerTrim]) {
+        return { title: `Options for "${trimmed}":`, items: LINUX_HELP_DATABASE.sub[lowerTrim] };
+    }
+    if (LINUX_HELP_DATABASE.sub) {
+        for (const [key, items] of Object.entries(LINUX_HELP_DATABASE.sub)) {
+            if (lowerTrim === key || (hasTrailingSpace && lowerTrim.startsWith(key))) {
+                return { title: `Options for "${key}":`, items };
+            }
+        }
+    }
+    if (!hasTrailingSpace) {
+        const lastWord = lowerTrim.split(/\s+/).pop();
+        const matches = LINUX_HELP_DATABASE.commands.filter(c => c.cmd.toLowerCase().startsWith(lastWord));
+        if (matches.length > 0) {
+            return { title: `Commands starting with "${lastWord}":`, items: matches };
+        }
+    }
+    return {
+        title: "Available parameters:",
+        items: [
+            { cmd: "<cr>", desc: "Execute command" }
+        ]
+    };
+}
 
 const CISCO_HELP_DATABASE = {
     exec: {
@@ -1771,6 +1872,28 @@ function handleTabAutocomplete() {
     const val = input.value.trim();
     if (!val) return;
 
+    if (isCurrentDeviceLinux()) {
+        const linuxAlias = {
+            "ip a": "ip addr",
+            "ip r": "ip route",
+            "ip l": "ip link",
+            "ifc": "ifconfig",
+            "sudo apt up": "sudo apt update",
+            "sudo apt in": "sudo apt install -y ",
+            "sys": "systemctl status ssh",
+            "cat os": "cat /etc/os-release"
+        };
+        if (linuxAlias[val.toLowerCase()]) {
+            input.value = linuxAlias[val.toLowerCase()];
+            return;
+        }
+        const matches = LINUX_HELP_DATABASE.commands.filter(c => c.cmd.toLowerCase().startsWith(val.toLowerCase()));
+        if (matches.length === 1) {
+            input.value = matches[0].cmd + " ";
+            return;
+        }
+    }
+
     const aliasMap = {
         "sh": "show ",
         "sh ip": "show ip ",
@@ -1809,6 +1932,17 @@ function handleCliKey(e) {
         const currentVal = input.value;
         const prompt = getCliPrompt();
         appendCliLine(`${prompt}${currentVal}?`);
+
+        if (isCurrentDeviceLinux()) {
+            const helpResult = resolveLinuxHelp(currentVal);
+            const formatted = formatCiscoHelpTerminal(helpResult);
+            appendCliOutput(formatted);
+            input.value = currentVal;
+            scrollToBottom();
+            focusCliInput();
+            return;
+        }
+
         fetch("/api/cli/execute", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -1940,9 +2074,13 @@ async function sendConsoleCmd() {
         }
 
         // จัดการสถานะ Password mode
-        if (data.is_password || (data.prompt && data.prompt.toLowerCase().includes("password:"))) {
+        if (data.is_password || (data.prompt && data.prompt.toLowerCase().includes("password"))) {
             cliIsPasswordMode = true;
             input.type = "password";
+            if (data.prompt) {
+                const promptEl = document.getElementById("cli-prompt");
+                if (promptEl) promptEl.textContent = data.prompt.endsWith(" ") ? data.prompt : data.prompt + " ";
+            }
         } else {
             cliIsPasswordMode = false;
             input.type = "text";

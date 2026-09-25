@@ -143,9 +143,10 @@ def add_device():
     dtype = (data.get("device_type_label") or "router").lower()
     conn_type = (data.get("connection_type") or "SSH").upper()
     if dtype == "pc":
-        data["connection_type"] = "PC"
+        if conn_type not in ("SSH", "TELNET"):
+            data["connection_type"] = "PC"
         if not data.get("ip"):
-            return jsonify({"success": False, "message": "Virtual PC ต้องมี IP address"}), 400
+            return jsonify({"success": False, "message": "PC ต้องมี IP address"}), 400
     elif dtype in ("network", "cloud"):
         data["device_type_label"] = "network"
         data["connection_type"] = "NETWORK"
@@ -164,7 +165,7 @@ def add_device():
         if not valid:
             return jsonify({"success": False, "message": msg}), 400
     device = add_device_to_inventory(data)
-    if dtype == "pc":
+    if dtype == "pc" and data.get("connection_type") == "PC":
         DEMO_DEVICES[device["id"]] = {
             "name": device.get("name", device["id"]),
             "model": device.get("model", "Virtual PC"),
@@ -229,7 +230,10 @@ def connect_device(device_id):
     dev = get_device_by_id(device_id) or {}
     if not dev and not data.get("ip"):
         return jsonify({"success": False, "message": f"ไม่พบ device '{device_id}' ใน inventory"}), 404
-    if (dev.get("device_type_label") or "").lower() == "pc":
+    
+    conn_type = (data.get("connection_type") or dev.get("connection_type") or "SSH").upper()
+    dtype = (dev.get("device_type_label") or "").lower()
+    if dtype == "pc" and conn_type == "PC":
         return jsonify({
             "success": True,
             "message": "Virtual PC ไม่ต้อง SSH — ใช้ฟอร์ม IP Config และ Ping ได้ทันที",
@@ -239,6 +243,19 @@ def connect_device(device_id):
     params.update(data)
     skip_ping = data.get("skip_ping", False)
     res = conn_mgr.connect(device_id, params, skip_ping=skip_ping)
+    if res.get("success"):
+        # อัปเดตข้อมูลเชื่อมต่อล่าสุดลง devices.json ถ้ามีการส่งพารามิเตอร์มาใหม่
+        try:
+            inv = load_inventory()
+            for d in inv:
+                if d.get("id") == device_id or d.get("name") == device_id:
+                    for k in ("connection_type", "username", "password", "port", "ip", "secret"):
+                        if k in data and data[k] is not None:
+                            d[k] = data[k]
+                    break
+            save_inventory(inv)
+        except Exception:
+            pass
     return jsonify(res)
 
 
@@ -277,24 +294,67 @@ def _interfaces_for_device(device_id: str, force_refresh: bool = False) -> list:
     dev = get_device_by_id(device_id)
     actual_id = dev.get("id", device_id) if dev else device_id
 
-    # ตรวจสอบการเชื่อมต่อ หรือ auto-connect สำหรับ live router
+    # ตรวจสอบการเชื่อมต่อ หรือ auto-connect สำหรับ live router / linux pc
     target_id = None
     if conn_mgr.is_connected(actual_id):
         target_id = actual_id
     elif conn_mgr.is_connected(device_id):
         target_id = device_id
-    elif dev and (dev.get("device_type_label") or "").lower() not in ("pc", "network"):
-        c_res = conn_mgr.connect(actual_id, dev, skip_ping=True)
-        if c_res.get("success"):
-            target_id = actual_id
+    else:
+        conn_type = (dev.get("connection_type") or "").upper() if dev else ""
+        dtype = (dev.get("device_type_label") or "").lower() if dev else ""
+        if dev and (conn_type in ("SSH", "TELNET") or dtype not in ("pc", "network")):
+            if not (dtype == "pc" and conn_type == "PC") and dtype != "network":
+                c_res = conn_mgr.connect(actual_id, dev, skip_ping=True)
+                if c_res.get("success"):
+                    target_id = actual_id
 
     if target_id:
-        result = conn_mgr.send_command(target_id, "show ip interface brief", use_textfsm=True)
-        parsed = parse_ip_interface_brief(result.get("output", ""))
-        if parsed:
-            _interface_cache[device_id] = {"data": parsed, "ts": now}
-            _interface_cache[actual_id] = {"data": parsed, "ts": now}
-            return parsed
+        pool_entry = conn_mgr.pool.get(target_id) or conn_mgr.pool.get(actual_id) or {}
+        dtype = (dev.get("device_type_label") or "").lower() if dev else ""
+        is_linux = pool_entry.get("is_linux") or dtype in ("pc", "linux") or "linux" in (dev.get("model") or "").lower() if dev else False
+
+        if is_linux:
+            # ดึง interface จาก Linux ด้วย ip -br addr หรือ ifconfig
+            result = conn_mgr.send_command(target_id, "ip -br addr")
+            raw_out = result.get("output", "")
+            parsed = []
+            import ipaddress
+            for line in raw_out.splitlines():
+                parts = line.strip().split()
+                if len(parts) >= 2:
+                    ifname = parts[0]
+                    state = parts[1].lower()
+                    ip_with_mask = parts[2] if len(parts) > 2 else ""
+                    ip_addr = "unassigned"
+                    mask = "255.255.255.0"
+                    if "/" in ip_with_mask:
+                        try:
+                            net = ipaddress.ip_network(ip_with_mask, strict=False)
+                            ip_addr = str(ip_with_mask.split("/")[0])
+                            mask = str(net.netmask)
+                        except Exception:
+                            ip_addr = ip_with_mask.split("/")[0]
+                    parsed.append({
+                        "name": ifname,
+                        "ip": ip_addr,
+                        "mask": mask,
+                        "status": "up" if "up" in state else ("down" if "down" in state else state),
+                        "protocol": "up" if "up" in state else "down",
+                        "method": "manual" if ip_addr != "unassigned" else "unset",
+                        "description": "Linux Network Interface"
+                    })
+            if parsed:
+                _interface_cache[device_id] = {"data": parsed, "ts": now}
+                _interface_cache[actual_id] = {"data": parsed, "ts": now}
+                return parsed
+        else:
+            result = conn_mgr.send_command(target_id, "show ip interface brief", use_textfsm=True)
+            parsed = parse_ip_interface_brief(result.get("output", ""))
+            if parsed:
+                _interface_cache[device_id] = {"data": parsed, "ts": now}
+                _interface_cache[actual_id] = {"data": parsed, "ts": now}
+                return parsed
 
     return _interface_cache.get(device_id, {}).get("data", [])
 
@@ -584,13 +644,36 @@ def run_show_command():
     dev = get_device_by_id(device_id)
     target_id = dev.get("id", device_id) if dev else device_id
 
+    conn_type = (dev.get("connection_type") or "").upper() if dev else ""
+    dtype = (dev.get("device_type_label") or "").lower() if dev else ""
+
     if not conn_mgr.is_connected(target_id) and not conn_mgr.is_connected(device_id):
-        if dev and (dev.get("device_type_label") or "").lower() not in ("pc", "network"):
-            conn_mgr.connect(target_id, dev, skip_ping=True)
+        if dev and (conn_type in ("SSH", "TELNET") or dtype not in ("pc", "network")):
+            if not (dtype == "pc" and conn_type == "PC") and dtype != "network":
+                conn_mgr.connect(target_id, dev, skip_ping=True)
 
     active_id = target_id if conn_mgr.is_connected(target_id) else (device_id if conn_mgr.is_connected(device_id) else None)
     if active_id:
-        result = conn_mgr.send_command(active_id, command)
+        pool_entry = conn_mgr.pool.get(active_id) or {}
+        is_linux = pool_entry.get("is_linux") or dtype in ("pc", "linux") or "linux" in (dev.get("model") or "").lower() if dev else False
+
+        actual_cmd = command
+        if is_linux:
+            linux_map = {
+                "show ip interface brief": "ip -br addr",
+                "show interfaces status": "ip -br addr; ip link show",
+                "show running-config": "cat /etc/netplan/*.yaml 2>/dev/null || ip addr",
+                "show startup-config": "cat /etc/network/interfaces 2>/dev/null || cat /etc/netplan/*.yaml 2>/dev/null || uname -a",
+                "show version": "uname -a; cat /etc/os-release",
+                "show vlan": "ip -d link show type vlan",
+                "show arp": "ip neigh show || arp -a",
+                "show ip route": "ip route show",
+                "show ip route static": "ip route show proto static || ip route show",
+                "show ip protocols": "systemctl list-units --type=service --state=running | head -n 25",
+            }
+            actual_cmd = linux_map.get(command.strip().lower(), command)
+
+        result = conn_mgr.send_command(active_id, actual_cmd)
         output = result.get("output", "")
     else:
         return jsonify({"success": False, "message": "Device not connected. Please connect first."})
@@ -645,7 +728,13 @@ def execute_cli():
     conn_err = None
     active_id = target_id if conn_mgr.is_connected(target_id, check_alive=True) else (device_id if conn_mgr.is_connected(device_id, check_alive=True) else None)
     if not active_id:
-        if dev and (dev.get("device_type_label") or "").lower() not in ("pc", "network"):
+        conn_type = (dev.get("connection_type") or "").upper() if dev else ""
+        dtype = (dev.get("device_type_label") or "").lower() if dev else ""
+        can_auto_connect = dev and (
+            conn_type in ("SSH", "TELNET", "SERIAL")
+            or (dtype not in ("pc", "network") and conn_type != "PC")
+        )
+        if can_auto_connect and not (dtype == "pc" and conn_type == "PC") and dtype != "network":
             c_res = conn_mgr.connect(target_id, dev, skip_ping=True)
             if c_res.get("success"):
                 active_id = target_id

@@ -85,7 +85,27 @@ ALL_COMMANDS = [
     # Show — CDP/LLDP
     "show cdp neighbors detail",
     "show lldp neighbors detail",
-    # Configure
+    # Linux / PC Commands
+    "ip addr",
+    "ip route",
+    "ip link",
+    "ifconfig",
+    "uname -a",
+    "whoami",
+    "sudo apt update",
+    "sudo apt install",
+    "systemctl status ssh",
+    "df -h",
+    "free -m",
+    "ss -tuln",
+    "netstat -tuln",
+    "cat /etc/os-release",
+    "cat /etc/netplan",
+    "hostname -I",
+    "traceroute",
+    "ping",
+    "clear",
+    # Cisco Configure
     "configure terminal",
     "interface",
     "ip address",
@@ -102,6 +122,18 @@ ALL_COMMANDS = [
     "end",
     "exit",
 ]
+
+# Add Linux Aliases
+COMMAND_ALIASES.update({
+    "ip a": "ip addr",
+    "ip r": "ip route",
+    "ip l": "ip link",
+    "ifc": "ifconfig",
+    "apt update": "sudo apt update",
+    "apt install": "sudo apt install",
+    "status ssh": "systemctl status ssh",
+    "os": "cat /etc/os-release",
+})
 
 
 def normalize(raw_command: str) -> str:

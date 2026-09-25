@@ -454,6 +454,29 @@
                                         class="fa-solid fa-binoculars"></i> cdp neighbors</button>
                             </div>
                         </div>
+                        <div class="show-section">
+                            <div class="show-section-label">Linux / PC Status Commands</div>
+                            <div class="show-buttons-grid">
+                                <button class="btn btn-outline" onclick="runShow('ip -br addr')"><i
+                                        class="fa-solid fa-network-wired"></i> ip -br addr (IPs)</button>
+                                <button class="btn btn-outline" onclick="runShow('ifconfig')"><i
+                                        class="fa-solid fa-list-check"></i> ifconfig</button>
+                                <button class="btn btn-outline" onclick="runShow('ip route show')"><i
+                                        class="fa-solid fa-map"></i> ip route</button>
+                                <button class="btn btn-outline" onclick="runShow('uname -a')"><i
+                                        class="fa-solid fa-circle-info"></i> uname -a</button>
+                                <button class="btn btn-outline" onclick="runShow('cat /etc/os-release')"><i
+                                        class="fa-brands fa-ubuntu"></i> os-release</button>
+                                <button class="btn btn-outline" onclick="runShow('systemctl status ssh')"><i
+                                        class="fa-solid fa-shield-halved"></i> ssh status</button>
+                                <button class="btn btn-outline" onclick="runShow('df -h')"><i
+                                        class="fa-solid fa-hard-drive"></i> df -h (Disk)</button>
+                                <button class="btn btn-outline" onclick="runShow('free -m')"><i
+                                        class="fa-solid fa-memory"></i> free -m (RAM)</button>
+                                <button class="btn btn-outline" onclick="runShow('ss -tuln')"><i
+                                        class="fa-solid fa-door-open"></i> open ports (ss)</button>
+                            </div>
+                        </div>
 
                         <div class="terminal-container">
                             <div class="terminal-header">

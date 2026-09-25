@@ -206,27 +206,43 @@ class ConnectionManager:
             return {"success": False, "message": "Netmiko ไม่ได้ติดตั้ง (pip install netmiko)"}
 
         try:
+            dtype = (device_params.get("device_type_label") or "").lower()
+            is_linux = dtype in ("pc", "linux", "ubuntu") or device_params.get("os_type") == "linux"
+
             if conn_type == "SSH":
-                params = {
-                    "device_type": "cisco_ios",
-                    "ip": ip,
-                    "username": device_params.get("username", "cisco"),
-                    "password": device_params.get("password", "cisco"),
-                    "secret":   device_params.get("secret", device_params.get("password", "cisco")),
-                    "port":     int(device_params.get("port", 22)),
-                    "conn_timeout": 10,
-                }
-                conn = ConnectHandler(**params)
-                try:
-                    conn.enable()
-                except Exception:
-                    pass
-                try:
-                    conn.send_command("terminal length 0")
-                except Exception:
-                    pass
-                self.pool[device_id] = {"handler": conn, "type": "SSH", "params": dict(device_params)}
-                return {"success": True, "message": f"SSH เชื่อมต่อ {ip}:{params['port']} สำเร็จ"}
+                if is_linux:
+                    params = {
+                        "device_type": "linux",
+                        "ip": ip,
+                        "username": device_params.get("username", "cisco"),
+                        "password": device_params.get("password", "cisco"),
+                        "port":     int(device_params.get("port", 22)),
+                        "conn_timeout": 10,
+                    }
+                    conn = ConnectHandler(**params)
+                    self.pool[device_id] = {"handler": conn, "type": "SSH", "is_linux": True, "params": dict(device_params)}
+                    return {"success": True, "message": f"SSH เชื่อมต่อ Linux PC {ip}:{params['port']} สำเร็จ"}
+                else:
+                    params = {
+                        "device_type": "cisco_ios",
+                        "ip": ip,
+                        "username": device_params.get("username", "cisco"),
+                        "password": device_params.get("password", "cisco"),
+                        "secret":   device_params.get("secret", device_params.get("password", "cisco")),
+                        "port":     int(device_params.get("port", 22)),
+                        "conn_timeout": 10,
+                    }
+                    conn = ConnectHandler(**params)
+                    try:
+                        conn.enable()
+                    except Exception:
+                        pass
+                    try:
+                        conn.send_command("terminal length 0")
+                    except Exception:
+                        pass
+                    self.pool[device_id] = {"handler": conn, "type": "SSH", "params": dict(device_params)}
+                    return {"success": True, "message": f"SSH เชื่อมต่อ {ip}:{params['port']} สำเร็จ"}
 
             elif conn_type == "TELNET":
                 port = int(device_params.get("port", 23))
@@ -416,11 +432,12 @@ class ConnectionManager:
             cmd_str = (command or "").strip()
 
             if conn_type in ("SSH", "TELNET"):
-                # ล้าง buffer ตกค้างก่อนส่งคำสั่ง เพื่อไม่ให้ข้อมูลเก่าปนกับคำสั่งใหม่
-                try:
-                    handler.clear_buffer()
-                except Exception:
-                    pass
+                # ล้าง buffer ตกค้างก่อนส่งคำสั่ง เพื่อไม่ให้ข้อมูลเก่าปนกับคำสั่งใหม่ (ยกเว้นกำลังรอป้อน Password)
+                if not entry.get("is_password_pending"):
+                    try:
+                        handler.clear_buffer()
+                    except Exception:
+                        pass
 
                 # รองรับ Ctrl+C (Break/Interrupt signal)
                 if command in ("\x03", "^C"):
@@ -433,7 +450,8 @@ class ConnectionManager:
                 else:
                     # ส่งคำสั่งจริงไปยัง Channel
                     handler.write_channel(f"{cmd_str}\r\n")
-                    raw = handler.read_channel_timing(last_read=1.5, read_timeout=20.0)
+                    last_read_time = 1.8 if entry.get("is_linux") else 1.5
+                    raw = handler.read_channel_timing(last_read=last_read_time, read_timeout=25.0)
 
                 # จัดการ Paging กรณีอุปกรณ์ส่ง output ยาวและติด --More-- (ตาม Section 14 & 24 ของ network_cli_teraterm_putty_vibecoding.md)
                 max_pages = 30
@@ -467,7 +485,8 @@ class ConnectionManager:
                         lines = [l.strip() for l in decoded.splitlines() if l.strip()]
                         if len(lines) >= 1 and (
                             re.search(r"^[A-Za-z0-9_\-\.\(\)]+[#>]\s*$", lines[-1])
-                            or re.search(r"^[Pp]assword:\s*$", lines[-1])
+                            or re.search(r"^[A-Za-z0-9_\-\.]+@[A-Za-z0-9_\-\.]+:[^#$]*[\$#]\s*$", lines[-1])
+                            or re.search(r"(\[sudo\]\s+)?password(\s+for\s+\S+)?:\s*$", lines[-1], re.I)
                         ):
                             break
                     time.sleep(0.05)
@@ -489,21 +508,26 @@ class ConnectionManager:
             while lines and not lines[-1].strip():
                 lines.pop()
 
-            # สกัด prompt ตัวจริงของ Cisco ออกมาจากบรรทัดสุดท้าย (Section 16-19, 40-41)
+            # สกัด prompt ตัวจริง ออกมาจากบรรทัดสุดท้าย (Section 16-19, 40-41)
             prompt = ""
             is_password = False
             if lines:
                 last_line = lines[-1].strip()
-                # 1. ตรวจจับ Password prompt (เช่น Password:, password:)
-                if re.search(r"^[Pp]assword:\s*$", last_line):
+                # 1. ตรวจจับ Password prompt (เช่น Password:, password:, [sudo] password for user:)
+                if re.search(r"(\[sudo\]\s+)?password(\s+for\s+\S+)?:\s*$", last_line, re.I):
                     prompt = lines.pop().strip()
                     is_password = True
-                # 2. ตรวจจับ Cisco CLI Prompt ปกติ (เช่น R1#, R1>, R1(config)#, S1(config-if)#, Switch#)
+                # 2. ตรวจจับ Interactive confirmation prompt ([confirm], [yes/no]:, [y/n], (yes/no):)
+                elif re.search(r"(\[confirm\]|\[yes/no\]|\[y/n\]|\(yes/no\)|Do you want to continue\?\s*\[Y/n\])", last_line, re.I):
+                    prompt = lines.pop().strip()
+                # 3. ตรวจจับ Linux Shell Prompt (เช่น ubuntu@ubuntu:~$ หรือ root@ubuntu:~# หรือ cisco@pc1:~$ หรือ dev@host:/var/log$)
+                elif re.search(r"^[A-Za-z0-9_\-\.]+@[A-Za-z0-9_\-\.]+:[^#$]*[\$#]\s*$", last_line):
+                    prompt = lines.pop().strip()
+                # 4. ตรวจจับ Cisco CLI Prompt ปกติ (เช่น R1#, R1>, R1(config)#, S1(config-if)#, Switch#)
                 elif re.search(r"^[A-Za-z0-9_\-\.\(\)]+[#>]\s*$", last_line):
                     prompt = lines.pop().strip()
-                # 3. ตรวจจับ Interactive confirmation prompt ([confirm], [yes/no]:)
-                elif re.search(r"\[confirm\]|\[yes/no\]:\s*$", last_line, re.I):
-                    prompt = lines.pop().strip()
+
+            entry["is_password_pending"] = is_password
 
             clean_output = "\n".join(lines).strip()
             return {

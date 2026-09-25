@@ -63,5 +63,19 @@
     "mask": "255.255.255.0",
     "gateway": "",
     "id": "SW2"
+  },
+  {
+    "name": "PC1",
+    "model": "Ubuntu Linux",
+    "device_type_label": "pc",
+    "connection_type": "SSH",
+    "ip": "192.168.80.139",
+    "port": 22,
+    "username": "user",
+    "password": "Test123",
+    "mask": "255.255.255.0",
+    "gateway": "192.168.80.131",
+    "id": "PC1",
+    "secret": ""
   }
 ]
