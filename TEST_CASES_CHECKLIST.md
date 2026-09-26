@@ -19,6 +19,107 @@
 
 ---
 
+## 🏗️ แผนผังเครือข่ายจำลองสำหรับการทดสอบจริง (Simulated Test Topology Blueprint)
+> **ข้อกำหนดโจทย์:** *"โดยสร้าง topo จำลองขึ้นมาและ test ตามข้อความที่โจทต้องการ"*
+
+เพื่อให้ครอบคลุมทุกมิติของการทดสอบตามเกณฑ์ Assignment 2 ระบบได้ออกแบบแผนผังเครือข่ายจำลอง (Simulated Topology Lab) ซึ่งประกอบด้วย **Router 3 ตัว (R1, R2, R3)**, **Layer 2 Switch 1 ตัว (SW1)**, **Linux Client Node 1 ตัว (PC1)** และ **Virtual PC 1 ตัว (PC2)** โดยจำลองสภาพแวดล้อมที่เชื่อมต่อผ่านโปรโตคอลครบทั้ง 3 ชนิด (**SSH**, **Telnet**, และ **Serial COM**)
+
+### 1. ผังการเชื่อมต่อเครือข่ายจำลอง (Mermaid Architecture Diagram)
+
+```mermaid
+graph LR
+    subgraph LAN_CLIENT ["🏢 Client Subnet (192.168.80.0/24)"]
+        PC1["🖥️ PC1 (Ubuntu Linux)<br/>IP: 192.168.80.146/24<br/>Protocol: SSH (Port 22)"]
+    end
+
+    subgraph BACKBONE ["🌐 Core Routing Backbone"]
+        R1["🧭 R1 (Cisco IOL / AS 65001)<br/>Eth0/0: 192.168.80.138/24 (Mgmt)<br/>Eth0/1: 10.1.12.1/30 (To R2)<br/>Loopback0: 1.1.1.1/32<br/>Protocol: SSH (Port 22)"]
+        
+        R2["🧭 R2 (Cisco IOL / Transit)<br/>Eth0/0: 192.168.80.135/24 (Mgmt)<br/>Eth0/1: 10.1.12.2/30 (To R1)<br/>Eth0/2: 10.1.23.1/30 (To R3)<br/>Loopback0: 2.2.2.2/32<br/>Protocol: TELNET (Port 23 / 32769)"]
+        
+        R3["🧭 R3 (Cisco IOL / AS 65002 / Physical)<br/>Eth0/0: 192.168.80.134/24 (Mgmt)<br/>Eth0/1: 10.1.23.2/30 (To R2)<br/>Eth0/2: 10.1.30.1/24 (To SW1)<br/>Loopback0: 3.3.3.3/32<br/>Protocol: SERIAL (COM3) / TELNET"]
+    end
+
+    subgraph LAN_BRANCH ["🏬 Branch Subnet (10.1.30.0/24)"]
+        SW1["🔀 SW1 (Cisco L2 IOL Switch)<br/>Vlan1: 192.168.80.140/24<br/>Eth0/0-3: Access/Trunk<br/>Protocol: TELNET (Port 23)"]
+        PC2["💻 Virtual PC2<br/>IP: 10.1.30.50/24<br/>Gateway: 10.1.30.1 (R3)"]
+    end
+
+    PC1 ---|Management Link| R1
+    R1 ===|Inter-Router 10.1.12.0/30| R2
+    R2 ===|Inter-Router 10.1.23.0/30| R3
+    R3 ===|LAN Gateway 10.1.30.0/24| SW1
+    SW1 ---|VLAN Access| PC2
+
+    classDef router fill:#1e293b,stroke:#38bdf8,stroke-width:2px,color:#f8fafc;
+    classDef switch fill:#1e293b,stroke:#a855f7,stroke-width:2px,color:#f8fafc;
+    classDef pc fill:#1e293b,stroke:#10b981,stroke-width:2px,color:#f8fafc;
+    class R1,R2,R3 router;
+    class SW1 switch;
+    class PC1,PC2 pc;
+```
+
+---
+
+### 2. ตารางการจัดสรร IP และรายละเอียดการเชื่อมต่อ (IP Addressing & Topology Matrix)
+
+| อุปกรณ์ (Device) | บทบาทในระบบ (Role) | ชนิดอุปกรณ์ | วิธีการเชื่อมต่อ (Protocol) | IP/พอร์ต สำหรับจัดการ (Mgmt Access) | Interface ที่ใช้ทดสอบ | IP Address / Subnet ที่กำหนด | ปลายทางที่เชื่อมต่อ (Connected Neighbor) |
+| :--- | :--- | :---: | :---: | :--- | :--- | :--- | :--- |
+| **PC1** | Linux Client | Ubuntu 22.04 | **SSH** | `192.168.80.146:22`<br/>(user/Test123) | `ens3` | `192.168.80.146/24` | Switch / Gateway |
+| **R1** | Border Gateway (AS 65001) | Cisco IOL L3 | **SSH** (Port 22) | `192.168.80.138:22`<br/>(admin/cisco) | `Ethernet0/1`<br/>`Loopback0` | `10.1.12.1 255.255.255.252`<br/>`1.1.1.1 255.255.255.255` | R2 `Eth0/1`<br/>Router ID |
+| **R2** | Core Transit Router | Cisco IOL L3 | **TELNET** (Console/23) | `192.168.80.135:23`<br/>(port 23 / 32769) | `Ethernet0/1`<br/>`Ethernet0/2`<br/>`Loopback0` | `10.1.12.2 255.255.255.252`<br/>`10.1.23.1 255.255.255.252`<br/>`2.2.2.2 255.255.255.255` | R1 `Eth0/1`<br/>R3 `Eth0/1`<br/>Router ID |
+| **R3** | Branch Router (AS 65002) | Cisco IOL / Physical | **SERIAL** (COM Port) / Telnet | พอร์ต `COM3` (Baud 9600)<br/>หรือ `192.168.80.134:23` | `Ethernet0/1`<br/>`Ethernet0/2`<br/>`Loopback0` | `10.1.23.2 255.255.255.252`<br/>`10.1.30.1 255.255.255.0`<br/>`3.3.3.3 255.255.255.255` | R2 `Eth0/2`<br/>SW1 `Eth0/0`<br/>Router ID |
+| **SW1** | LAN Distribution Switch | Cisco IOL L2 | **TELNET** (Port 23) | `192.168.80.140:23` | `Vlan1`<br/>`Ethernet0/0-3` | `192.168.80.140 255.255.255.0`<br/>L2 Switching | Management / R3 / PC2 |
+| **PC2** | Simulated Branch PC | Virtual Node | **Proxy via Gateway** | ผ่าน R3 Gateway | `veth0` | `10.1.30.50 255.255.255.0` | Gateway `10.1.30.1` |
+
+---
+
+### 3. ลำดับขั้นตอนการทดสอบแบบบูรณาการ (End-to-End Test Execution Roadmap)
+
+เมื่อเริ่มต้นทดสอบระบบ ให้ปฏิบัติตามลำดับ 5 ลำดับขั้น (Phases) ดังนี้:
+
+```text
+[Phase 1: Connection & Discovery]
+  ├── เชื่อมต่อ R1 (SSH)
+  ├── เชื่อมต่อ R2 (Telnet)
+  ├── เชื่อมต่อ R3 (Serial COM Port)
+  ├── เชื่อมต่อ SW1 (Telnet) และ PC1 (Linux SSH)
+  └── กด Auto-Discover เพื่อเรนเดอร์ Topology ผังเครือข่ายจำลองแบบ Interactive
+        │
+        ▼
+[Phase 2: Interface Provisioning]
+  ├── กำหนด IP 10.1.12.1/30 บน R1 (Eth0/1) และสั่ง Up (no shutdown)
+  ├── กำหนด IP 10.1.12.2/30 และ 10.1.23.1/30 บน R2 และสั่ง Up
+  ├── กำหนด IP 10.1.23.2/30 และ 10.1.30.1/24 บน R3 และสั่ง Up
+  ├── ทดสอบสั่ง Down (shutdown) บนพอร์ตสำรอง เช่น Eth0/3 แล้วสั่ง Up กลับคืน
+  └── ทดสอบกำหนดโหมด DHCP Client และโหมด No IP
+        │
+        ▼
+[Phase 3: Routing Protocols Implementation]
+  ├── 3.1 Static Route: R1 วิ่งไปเครือข่าย 10.1.30.0/24 ผ่าน Next-Hop 10.1.12.2 (R2)
+  ├── 3.2 Default Route: R1 วิ่งออก Internet 0.0.0.0 0.0.0.0 via 192.168.80.1
+  ├── 3.3 RIP v2: ประกาศ Network 10.1.12.0 และ 10.1.23.0 ระหว่าง R1 และ R2
+  ├── 3.4 EIGRP 100: ประกาศ Network 10.1.23.0 0.0.0.3 ระหว่าง R2 และ R3
+  ├── 3.5 OSPF Area 0: ประกาศ Backbone Subnet ระหว่าง R1 - R2
+  ├── 3.6 BGP (AS 65001 - 65002): สร้าง Neighbor ข้าม AS ระหว่าง R1 และ R3
+  └── ตรวจสอบ Live Cisco IOS Preview ทุกขั้นตอนก่อนกดยืนยัน Deploy
+        │
+        ▼
+[Phase 4: Verification & Show Commands]
+  ├── รัน `show ip route` และ `show ip route static` บน R1
+  ├── รัน `show ip protocols` ตรวจสอบ Routing Engine ที่ทำงานอยู่
+  ├── รัน `show ip ospf neighbor` / `show ip eigrp neighbors` / `show ip bgp summary`
+  ├── รัน `show ip interface brief` และ `show running-config`
+  └── ทดสอบปุ่ม Copy Terminal Output
+        │
+        ▼
+[Phase 5: Bonus Features Inspection]
+  ├── ตรวจสอบการจัดวาง Node, Zoom In/Out บน Interactive Topology Canvas (+1.5 คะแนน)
+  └── กดปุ่ม Front Panel บน R1/SW1 ดูโครงหน้ากากเครื่อง ไฟ LED และ Speed ทุกพอร์ต (+1.5 คะแนน)
+```
+
+---
+
 # ภาคที่ 1: ข้อกำหนดหลัก (Core Requirements — 10 คะแนน)
 
 ---
@@ -28,23 +129,23 @@
 
 ### [TC-CONN-01] การเชื่อมต่อผ่าน Telnet (EVE-NG Console / Cisco Port 23)
 * **วัตถุประสงค์:** ตรวจสอบการเชื่อมต่อไปยังอุปกรณ์ใน EVE-NG ผ่าน Port Telnet Console (เช่น 32769) หรือ Cisco Port 23 จริง
-* **ข้อมูลทดสอบ:** อุปกรณ์ `R4` (IP: `192.168.80.134`, Port: `23`) หรือ Port Console ของ EVE-NG
+* **ข้อมูลทดสอบ:** อุปกรณ์ `R2` (IP: `192.168.80.135`, Port: `23`) หรือ `SW1` (IP: `192.168.80.140`, Port: `23`)
 * **ขั้นตอนการทดสอบ (Steps):**
   1. ไปที่แท็บ **Connect** (แท็บที่ 5)
-  2. เลือก Target Device: `R4` (หรือเลือกจาก Inventory)
+  2. เลือก Target Device: `R2` (หรือเลือกจาก Inventory)
   3. เลือก Connection Protocol: `TELNET`
   4. ระบุ Port: `23` (หรือ `32769` หากต่อ EVE Console), Password: `cisco`
   5. กดปุ่ม **Connect**
 * **ผลลัพธ์ที่คาดหวัง (Expected Result):**
-  - [ ] แสดงข้อความสีเขียว: `Connected to R4 (TELNET)`
-  - [ ] ในแท็บ **CLI** หน้าจอแสดง Prompt ของอุปกรณ์ เช่น `R4#`
+  - [ ] แสดงข้อความสีเขียว: `Connected to R2 (TELNET)`
+  - [ ] ในแท็บ **CLI** หน้าจอแสดง Prompt ของอุปกรณ์ เช่น `R2#`
   - [ ] สามารถพิมพ์คำสั่งโต้ตอบได้ทันที
 
 ---
 
 ### [TC-CONN-02] การเชื่อมต่อผ่าน SSH (Cisco Port 22 & Linux PC)
 * **วัตถุประสงค์:** ตรวจสอบการเชื่อมต่อแบบเข้ารหัส SSH บน Cisco Router/Switch และ Linux Ubuntu Node
-* **ข้อมูลทดสอบ:** `R1` (IP: `192.168.80.138`, Port: `22`, User: `admin`, Pass: `cisco`) หรือ `PC1` (IP: `192.168.80.139`, Port: `22`, User: `user`, Pass: `Test123`)
+* **ข้อมูลทดสอบ:** `R1` (IP: `192.168.80.138`, Port: `22`, User: `admin`, Pass: `cisco`) หรือ `PC1` (IP: `192.168.80.146`, Port: `22`, User: `user`, Pass: `Test123`)
 * **ขั้นตอนการทดสอบ (Steps):**
   1. ไปที่แท็บ **Connect**
   2. เลือก Device: `R1` (สำหรับ Cisco) หรือ `PC1` (สำหรับ Linux)
@@ -60,11 +161,13 @@
 
 ### [TC-CONN-03] การเชื่อมต่อผ่านสาย Serial (COM Port / สาย Console อุปกรณ์จริง)
 * **วัตถุประสงค์:** ตรวจสอบการรองรับการเชื่อมต่อผ่านสาย Console จริง (RS-232 / USB-to-Serial) ด้วย PySerial
+* **ข้อมูลทดสอบ:** อุปกรณ์ `R3` หรือเราเตอร์จริงที่ต่อผ่านสาย Serial Adapter
 * **ขั้นตอนการทดสอบ (Steps):**
   1. ไปที่แท็บ **Connect**
-  2. เลือก Protocol: `SERIAL`
-  3. หน้าจอจะสลับมาแสดงช่องกรอก **COM Port** (เช่น `COM3` หรือ `/dev/ttyUSB0`) และ **Baud Rate** (เช่น `9600`)
-  4. กดปุ่ม **Connect** (หรือหากไม่ได้เสียบสายจริง สามารถทดสอบการสลับฟิลด์และการแจ้งเตือนของระบบได้)
+  2. เลือก Target Device: `R3`
+  3. เลือก Protocol: `SERIAL`
+  4. หน้าจอจะสลับมาแสดงช่องกรอก **COM Port** (เช่น `COM3` หรือ `/dev/ttyUSB0`) และ **Baud Rate** (เช่น `9600`)
+  5. กดปุ่ม **Connect** (หรือหากไม่ได้เสียบสายจริง สามารถทดสอบการสลับฟิลด์และการแจ้งเตือนของระบบได้)
 * **ผลลัพธ์ที่คาดหวัง (Expected Result):**
   - [ ] ฟอร์มแสดงช่องกรอก COM Port และ Baud Rate (9600, 115200, 38400) ถูกต้อง
   - [ ] มีระบบดักจับและแจ้งเตือนพอร์ต Serial อย่างถูกต้องตามมาตรฐาน
@@ -74,7 +177,7 @@
 ### [TC-CONN-04] การทดสอบยิง Ping และการตั้งค่า SSH Wizard
 * **วัตถุประสงค์:** ตรวจสอบความพร้อมของเครือข่ายก่อนเชื่อมต่อ และมีตัวช่วยเปิด SSH บนอุปกรณ์ Cisco อัตโนมัติ
 * **ขั้นตอนการทดสอบ (Steps):**
-  1. ในแท็บ Connect พิมพ์ IP `192.168.80.139` แล้วกดปุ่ม **Test Ping**
+  1. ในแท็บ Connect พิมพ์ IP `192.168.80.138` (R1) แล้วกดปุ่ม **Test Ping**
   2. ในส่วน **SSH Setup Wizard** ด้านล่าง ระบุ Domain: `lab.local`, Key: `2048` แล้วกดรัน
 * **ผลลัพธ์ที่คาดหวัง (Expected Result):**
   - [ ] ผลการ Ping แสดงสถานะ `Host is reachable` พร้อมค่า RTT
@@ -92,7 +195,7 @@
   2. ไปที่ **Tab 1: Interface**
   3. กดปุ่ม **Refresh** เหนือตาราง
 * **ผลลัพธ์ที่คาดหวัง (Expected Result):**
-  - [ ] ตาราง Interface แสดงรายชื่อพอร์ตจริง (เช่น `GigabitEthernet0/0/0`, `Loopback0`)
+  - [ ] ตาราง Interface แสดงรายชื่อพอร์ตจริง (เช่น `Ethernet0/0`, `Ethernet0/1`, `Loopback0`)
   - [ ] แสดงค่า IP Address, Subnet Mask, สถานะ Status (`up`/`down`), และ Protocol (`up`/`down`)
   - [ ] เมื่อสลับไปที่ `PC1` แสดงพอร์ต Linux เช่น `ens3`, `lo` พร้อม IP `/24`
 
@@ -101,7 +204,7 @@
 ### [TC-IF-02] การสั่งเปิดพอร์ต Up (no shutdown) ผ่าน UI
 * **วัตถุประสงค์:** ตรวจสอบการกดปุ่มสั่งเปิดใช้งาน Interface จากหน้าต่าง UI โดยตรง
 * **ขั้นตอนการทดสอบ (Steps):**
-  1. ในตาราง Interface คลิกเลือกแถวพอร์ตที่ต้องการเปิด (เช่น `Loopback0` หรือ `GigabitEthernet0/0/2`)
+  1. ในตาราง Interface คลิกเลือกแถวพอร์ตที่ต้องการเปิด (เช่น `Ethernet0/1` หรือ `Loopback0`)
   2. ที่ส่วน **Step 2:** กดปุ่มสีเขียว **Up**
 * **ผลลัพธ์ที่คาดหวัง (Expected Result):**
   - [ ] ระบบส่งคำสั่ง `interface <name>` ตามด้วย `no shutdown` เข้าไปยังอุปกรณ์
@@ -113,7 +216,7 @@
 ### [TC-IF-03] การสั่งปิดพอร์ต Down (shutdown) ผ่าน UI
 * **วัตถุประสงค์:** ตรวจสอบการกดปุ่มสั่งปิดการทำงานของ Interface
 * **ขั้นตอนการทดสอบ (Steps):**
-  1. คลิกเลือกพอร์ตในตาราง
+  1. คลิกเลือกพอร์ตสำรองในตาราง เช่น `Ethernet0/3`
   2. ที่ส่วน **Step 2:** กดปุ่มสีแดง **Down**
 * **ผลลัพธ์ที่คาดหวัง (Expected Result):**
   - [ ] ระบบส่งคำสั่ง `shutdown` ไปยังอุปกรณ์
@@ -125,22 +228,22 @@
 ### [TC-IF-04] การกำหนด Static IP Address และ Subnet Mask พร้อมดู Preview
 * **วัตถุประสงค์:** ตรวจสอบการกรอกฟอร์มเพื่อกำหนด IP Address และ Subnet Mask ลงใน Interface
 * **ขั้นตอนการทดสอบ (Steps):**
-  1. เลือก Interface จาก Dropdown เช่น `GigabitEthernet0/0/1`
+  1. เลือก Interface จาก Dropdown เช่น `Ethernet0/1` บน `R1`
   2. เลือกโหมด: `Static IP`
-  3. กรอก IP Address: `10.50.1.1`
-  4. กรอก Subnet Mask: `255.255.255.0`
-  5. กรอก Description (ถ้ามี): `Link-to-Branch`
+  3. กรอก IP Address: `10.1.12.1`
+  4. กรอก Subnet Mask: `255.255.255.252`
+  5. กรอก Description (ถ้ามี): `Link-to-R2`
   6. สังเกตกล่อง **Cisco IOS Preview**
   7. กดปุ่ม **Deploy Interface Config**
 * **ผลลัพธ์ที่คาดหวัง (Expected Result):**
   - [ ] กล่อง Preview แสดงโค้ด:
     ```cisco
-    interface GigabitEthernet0/0/1
-     description Link-to-Branch
-     ip address 10.50.1.1 255.255.255.0
+    interface Ethernet0/1
+     description Link-to-R2
+     ip address 10.1.12.1 255.255.255.252
      no shutdown
     ```
-  - [ ] ระบบ Deploy คำสั่งลงอุปกรณ์จริงสำเร็จ และตาราง Interface แสดง IP `10.50.1.1`
+  - [ ] ระบบ Deploy คำสั่งลงอุปกรณ์จริงสำเร็จ และตาราง Interface แสดง IP `10.1.12.1`
 
 ---
 
@@ -159,31 +262,31 @@
 > **โจทย์กำหนด:** *"สามารถทำ Routing เช่น RIP, EIGRP, OSPF, BGP, Static และ Default Static Route ได้"*
 
 ### [TC-RT-01] การตั้งค่า Static Route
-* **วัตถุประสงค์:** ตรวจสอบการสร้างเส้นทางแบบกำหนดเอง (Static Routing)
+* **วัตถุประสงค์:** ตรวจสอบการสร้างเส้นทางแบบกำหนดเอง (Static Routing) จาก R1 ไปยังเครือข่ายปลายทางของ R3
 * **ขั้นตอนการทดสอบ (Steps):**
-  1. ไปที่ **Tab 2: Routing**
+  1. เลือก Target Device: `R1` แล้วไปที่ **Tab 2: Routing**
   2. เลือกประเภท: **Static**
-  3. กรอก Destination Network: `172.16.10.0`
+  3. กรอก Destination Network: `10.1.30.0`
   4. กรอก Subnet Mask: `255.255.255.0`
-  5. กรอก Next-Hop IP: `10.1.1.2`
-  6. ดู Preview: `ip route 172.16.10.0 255.255.255.0 10.1.1.2`
+  5. กรอก Next-Hop IP: `10.1.12.2` (IP ของ R2)
+  6. ดู Preview: `ip route 10.1.30.0 255.255.255.0 10.1.12.2`
   7. กดปุ่ม **Deploy Routing Config**
 * **ผลลัพธ์ที่คาดหวัง (Expected Result):**
   - [ ] ส่งคำสั่งไปยังอุปกรณ์สำเร็จ
-  - [ ] เมื่อรันคำสั่ง `show ip route static` พบเส้นทาง `S  172.16.10.0/24 [1/0] via 10.1.1.2`
+  - [ ] เมื่อรันคำสั่ง `show ip route static` พบเส้นทาง `S  10.1.30.0/24 [1/0] via 10.1.12.2`
 
 ---
 
 ### [TC-RT-02] การตั้งค่า Default Static Route
-* **วัตถุประสงค์:** ตรวจสอบการสร้างเส้นทาง Default Route (`0.0.0.0 0.0.0.0`)
+* **วัตถุประสงค์:** ตรวจสอบการสร้างเส้นทาง Default Route (`0.0.0.0 0.0.0.0`) เพื่อออก Internet/ภายนอก
 * **ขั้นตอนการทดสอบ (Steps):**
   1. เลือกประเภท: **Default**
-  2. กรอก Next-Hop IP: `192.168.1.1` (หรือ Exit Interface เช่น `GigabitEthernet0/0/0`)
-  3. ดู Preview: `ip route 0.0.0.0 0.0.0.0 192.168.1.1`
+  2. กรอก Next-Hop IP: `192.168.80.1` (หรือ Exit Interface เช่น `Ethernet0/0`)
+  3. ดู Preview: `ip route 0.0.0.0 0.0.0.0 192.168.80.1`
   4. กดปุ่ม **Deploy Routing Config**
 * **ผลลัพธ์ที่คาดหวัง (Expected Result):**
   - [ ] ส่งคำสั่งสำเร็จ
-  - [ ] เมื่อดู `show ip route` พบข้อความ `Gateway of last resort is 192.168.1.1 to network 0.0.0.0`
+  - [ ] เมื่อดู `show ip route` พบข้อความ `Gateway of last resort is 192.168.80.1 to network 0.0.0.0`
 
 ---
 
@@ -192,14 +295,14 @@
 * **ขั้นตอนการทดสอบ (Steps):**
   1. เลือกประเภท: **RIP**
   2. เลือก RIP Version: `Version 2 (classless + VLSM)`
-  3. กด `+ Add Network` เพื่อเพิ่มเครือข่าย เช่น `192.168.1.0` และ `10.0.0.0`
+  3. กด `+ Add Network` เพื่อเพิ่มเครือข่าย `10.1.12.0` และ `1.1.1.1`
   4. ดู Preview:
      ```cisco
      router rip
       version 2
       no auto-summary
-      network 192.168.1.0
-      network 10.0.0.0
+      network 10.1.12.0
+      network 1.1.1.1
      ```
   5. กดปุ่ม **Deploy Routing Config**
 * **ผลลัพธ์ที่คาดหวัง (Expected Result):**
@@ -210,16 +313,17 @@
 ### [TC-RT-04] การตั้งค่า EIGRP (Enhanced Interior Gateway Routing Protocol)
 * **วัตถุประสงค์:** ตรวจสอบการคอนฟิก EIGRP ด้วย Autonomous System (AS) และ Wildcard Mask
 * **ขั้นตอนการทดสอบ (Steps):**
-  1. เลือกประเภท: **EIGRP**
-  2. กำหนด AS Number: `100`
-  3. กด `+ Add Network` แล้วระบุ Network: `192.168.10.0`, Wildcard: `0.0.0.255`
-  4. ดู Preview:
+  1. สลับ Target Device ไปที่ `R2` แล้วเลือกแท็บ **Routing**
+  2. เลือกประเภท: **EIGRP**
+  3. กำหนด AS Number: `100`
+  4. กด `+ Add Network` แล้วระบุ Network: `10.1.23.0`, Wildcard: `0.0.0.3`
+  5. ดู Preview:
      ```cisco
      router eigrp 100
       no auto-summary
-      network 192.168.10.0 0.0.0.255
+      network 10.1.23.0 0.0.0.3
      ```
-  5. กดปุ่ม **Deploy Routing Config**
+  6. กดปุ่ม **Deploy Routing Config**
 * **ผลลัพธ์ที่คาดหวัง (Expected Result):**
   - [ ] ส่งคำสั่งเข้าอุปกรณ์สำเร็จ สามารถตรวจสอบสถานะได้ผ่าน `show ip eigrp neighbors`
 
@@ -228,33 +332,35 @@
 ### [TC-RT-05] การตั้งค่า OSPF (Open Shortest Path First)
 * **วัตถุประสงค์:** ตรวจสอบการคอนฟิก OSPF พร้อม Process ID, Router ID, และ Area
 * **ขั้นตอนการทดสอบ (Steps):**
-  1. เลือกประเภท: **OSPF**
-  2. กำหนด Process ID: `1`, Router-ID: `1.1.1.1`
-  3. กด `+ Add Network`: Network: `10.0.0.0`, Wildcard: `0.0.0.255`, Area: `0`
-  4. ดู Preview:
+  1. สลับ Target Device ไปที่ `R1` แล้วเลือกแท็บ **Routing**
+  2. เลือกประเภท: **OSPF**
+  3. กำหนด Process ID: `1`, Router-ID: `1.1.1.1`
+  4. กด `+ Add Network`: Network: `10.1.12.0`, Wildcard: `0.0.0.3`, Area: `0`
+  5. ดู Preview:
      ```cisco
      router ospf 1
       router-id 1.1.1.1
-      network 10.0.0.0 0.0.0.255 area 0
+      network 10.1.12.0 0.0.0.3 area 0
      ```
-  5. กดปุ่ม **Deploy Routing Config**
+  6. กดปุ่ม **Deploy Routing Config**
 * **ผลลัพธ์ที่คาดหวัง (Expected Result):**
-  - [ ] ส่งคำสั่งสำเร็จ ตรวจสอบผ่าน `show ip ospf neighbor` พบ OSPF Adjacency ทำงานถูกต้อง
+  - [ ] ส่งคำสั่งสำเร็จ ตรวจสอบผ่าน `show ip ospf neighbor` พบ OSPF Adjacency กับเพื่อนบ้านสำเร็จ
 
 ---
 
 ### [TC-RT-06] การตั้งค่า BGP (Border Gateway Protocol)
-* **วัตถุประสงค์:** ตรวจสอบการคอนฟิก External/Internal BGP Neighbor และการประกาศ Route
+* **วัตถุประสงค์:** ตรวจสอบการคอนฟิก External/Internal BGP Neighbor และการประกาศ Route ข้าม AS
 * **ขั้นตอนการทดสอบ (Steps):**
-  1. เลือกประเภท: **BGP**
-  2. กำหนด Local AS Number: `65001`
-  3. กด `+ Add Neighbor`: Neighbor IP: `10.1.1.2`, Remote AS: `65002`
-  4. กด `+ Add Network`: Network: `192.168.100.0`, Mask: `255.255.255.0`
+  1. บน `R1` เลือกประเภท: **BGP**
+  2. กำหนด Local AS Number: `65001`, Router-ID: `1.1.1.1`
+  3. กด `+ Add Neighbor`: Neighbor IP: `10.1.12.2`, Remote AS: `65002`
+  4. กด `+ Add Network`: Network: `1.1.1.1`, Mask: `255.255.255.255`
   5. ดู Preview:
      ```cisco
      router bgp 65001
-      neighbor 10.1.1.2 remote-as 65002
-      network 192.168.100.0 mask 255.255.255.0
+      bgp router-id 1.1.1.1
+      neighbor 10.1.12.2 remote-as 65002
+      network 1.1.1.1 mask 255.255.255.255
      ```
   6. กดปุ่ม **Deploy Routing Config**
 * **ผลลัพธ์ที่คาดหวัง (Expected Result):**

@@ -374,5 +374,19 @@ EVE-NG อนุญาตให้มีโปรแกรมเชื่อม�
 
 ---
 
+## 6. แนวทางการทดสอบระบบตามเกณฑ์ Assignment 2 (Test Cases & Topology Blueprint)
+
+สำหรับการทดสอบระบบอย่างเป็นระบบ (Systematic Verification) เพื่อเก็บคะแนน **10 คะแนนหลัก + 3 คะแนนโบนัส** โปรดดูรายละเอียดในเอกสาร:
+👉 [TEST_CASES_CHECKLIST.md](file:///c:/Users/phala/Downloads/มจพ/ปี%202%20เทอม%201/Network%20Programming/Assignment%202/TEST_CASES_CHECKLIST.md)
+
+ภายในเอกสารดังกล่าวมี:
+1. **ผังเครือข่ายจำลอง (Simulated Topology Blueprint)**: โครงสร้าง Router 3 ตัว (R1, R2, R3), Switch (SW1), Linux PC (PC1), Virtual PC (PC2)
+2. **ตารางจัดสรร IP & Protocol Matrix**: กำหนดค่าเชื่อมต่อครบทั้ง SSH, Telnet, Serial COM
+3. **ขั้นตอนการทดสอบทีละข้อ (Step-by-Step Test Walkthrough)**: ครอบคลุม Interface IP/Up/Down, Routing 6 ชนิด (Static, Default, RIP, EIGRP, OSPF, BGP), Show Commands, Auto Discovery, และ Front Panel Ports
+4. **ใบบันทึกคะแนน (Evaluation Scorecard)**: พร้อมให้พิมพ์หรือส่งอาจารย์ตรวจได้ทันที
+
+---
+
 **จัดทำขึ้นเพื่อการศึกษาและการเรียนรู้ Network Programming**  
 *NetConfig Tracer Studio v3 — Automated Cisco Lab Solution*
+
