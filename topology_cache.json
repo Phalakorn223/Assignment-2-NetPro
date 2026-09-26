@@ -1,151 +1,164 @@
 {
   "nodes": [
     {
-      "id": "R2",
-      "name": "R2",
-      "type": "router",
-      "ip": "192.168.80.137",
-      "model": "",
-      "status": "discovered"
-    },
-    {
-      "id": "SW1",
-      "name": "SW1",
-      "type": "switch",
-      "ip": "192.168.80.140",
-      "model": "",
-      "status": "discovered"
-    },
-    {
       "id": "R1",
       "name": "R1",
       "type": "router",
       "ip": "192.168.80.138",
-      "model": "",
+      "model": "L3-ADVENTERPRISEK9-M-15.4-2T.bin",
       "status": "connected"
     },
     {
-      "id": "R4",
-      "name": "R4",
+      "id": "SW1",
+      "name": "SW1",
+      "type": "router",
+      "ip": "192.168.80.140",
+      "model": "i86bi_linux_l2-ipbasek9-ms.high_iron_aug9_2017b.bin",
+      "status": "connected"
+    },
+    {
+      "id": "R2",
+      "name": "R2",
+      "type": "router",
+      "ip": "192.168.80.135",
+      "model": "L3-ADVENTERPRISEK9-M-15.4-2T.bin",
+      "status": "connected"
+    },
+    {
+      "id": "R3",
+      "name": "R3",
       "type": "router",
       "ip": "192.168.80.134",
-      "model": "",
-      "status": "connected"
-    },
-    {
-      "id": "SW2",
-      "name": "SW2",
-      "type": "switch",
-      "ip": "192.168.80.141",
-      "model": "",
-      "status": "discovered"
-    },
-    {
-      "id": "PC1",
-      "name": "PC1",
-      "type": "pc",
-      "ip": "127.0.0.1",
-      "model": "Ubuntu Linux",
+      "model": "L3-ADVENTERPRISEK9-M-15.4-2T.bin",
       "status": "connected"
     },
     {
       "id": "R5",
       "name": "R5",
       "type": "router",
-      "ip": "192.168.80.250",
-      "model": "",
-      "status": "discovered"
+      "ip": "192.168.80.145",
+      "model": "L3-ADVENTERPRISEK9-M-15.4-2T.bin",
+      "status": "connected"
     },
     {
-      "id": "Net_192_168_80_0_24",
-      "name": "Net 192.168.80.0/24",
+      "id": "R4",
+      "name": "R4",
+      "type": "router",
+      "ip": "192.168.80.144",
+      "model": "L3-ADVENTERPRISEK9-M-15.4-2T.bin",
+      "status": "connected"
+    },
+    {
+      "id": "SW2",
+      "name": "SW2",
+      "type": "router",
+      "ip": "192.168.80.141",
+      "model": "i86bi_linux_l2-ipbasek9-ms.high_iron_aug9_2017b.bin",
+      "status": "connected"
+    },
+    {
+      "id": "R6",
+      "name": "R6",
+      "type": "router",
+      "ip": "192.168.80.143",
+      "model": "L3-ADVENTERPRISEK9-M-15.4-2T.bin",
+      "status": "connected"
+    },
+    {
+      "id": "Linux",
+      "name": "Linux",
+      "type": "router",
+      "ip": "127.0.0.1",
+      "model": "linux-ubuntu-21.04-desktop",
+      "status": "connected"
+    },
+    {
+      "id": "Net",
+      "name": "Net",
       "type": "network",
-      "ip": "192.168.80.0/24",
+      "ip": "Multi-Access Network",
       "model": "cloud",
       "status": "discovered"
     }
   ],
   "edges": [
     {
-      "from": "R2",
-      "to": "Net_192_168_80_0_24",
+      "from": "R1",
+      "to": "SW1",
       "from_port": "Ethernet0/0",
-      "to_port": "",
+      "to_port": "Ethernet0/1",
       "status": "up",
-      "method": "subnet_match",
-      "from_ip": "192.168.80.137",
-      "subnet": "192.168.80.0/24"
+      "method": "eveng",
+      "from_ip": "192.168.80.138"
     },
     {
       "from": "SW1",
-      "to": "Net_192_168_80_0_24",
+      "to": "Net",
       "from_port": "Ethernet0/0",
       "to_port": "",
       "status": "up",
-      "method": "subnet_match",
-      "from_ip": "192.168.80.140",
-      "subnet": "192.168.80.0/24"
+      "method": "eveng"
     },
     {
-      "from": "R1",
-      "to": "Net_192_168_80_0_24",
-      "from_port": "Ethernet0/0",
-      "to_port": "",
+      "from": "SW1",
+      "to": "R2",
+      "from_port": "Ethernet0/2",
+      "to_port": "Ethernet0/0",
       "status": "up",
-      "method": "subnet_match",
-      "from_ip": "192.168.80.138",
-      "subnet": "192.168.80.0/24"
+      "method": "eveng",
+      "to_ip": "192.168.80.135"
     },
     {
-      "from": "R1",
-      "to": "R4",
-      "from_port": "Ethernet0/1",
-      "to_port": "Ethernet0/1",
+      "from": "SW1",
+      "to": "R3",
+      "from_port": "Ethernet0/3",
+      "to_port": "Ethernet0/0",
       "status": "up",
-      "method": "subnet_match",
-      "from_ip": "10.1.1.1",
-      "to_ip": "10.1.1.2",
-      "subnet": "10.1.1.0/24"
-    },
-    {
-      "from": "R4",
-      "to": "Net_192_168_80_0_24",
-      "from_port": "Ethernet0/0",
-      "to_port": "",
-      "status": "up",
-      "method": "subnet_match",
-      "from_ip": "192.168.80.134",
-      "subnet": "192.168.80.0/24"
-    },
-    {
-      "from": "SW2",
-      "to": "Net_192_168_80_0_24",
-      "from_port": "Ethernet0/0",
-      "to_port": "",
-      "status": "up",
-      "method": "subnet_match",
-      "from_ip": "192.168.80.141",
-      "subnet": "192.168.80.0/24"
-    },
-    {
-      "from": "PC1",
-      "to": "Net_192_168_80_0_24",
-      "from_port": "ens3",
-      "to_port": "",
-      "status": "up",
-      "method": "subnet_match",
-      "from_ip": "192.168.80.139",
-      "subnet": "192.168.80.0/24"
+      "method": "eveng",
+      "to_ip": "192.168.80.134"
     },
     {
       "from": "R5",
-      "to": "Net_192_168_80_0_24",
+      "to": "SW2",
+      "from_port": "Ethernet0/0",
+      "to_port": "Ethernet0/2",
+      "status": "up",
+      "method": "eveng",
+      "from_ip": "192.168.80.145"
+    },
+    {
+      "from": "R4",
+      "to": "SW2",
+      "from_port": "Ethernet0/0",
+      "to_port": "Ethernet0/1",
+      "status": "up",
+      "method": "eveng",
+      "from_ip": "192.168.80.144"
+    },
+    {
+      "from": "SW2",
+      "to": "Net",
       "from_port": "Ethernet0/0",
       "to_port": "",
       "status": "up",
-      "method": "subnet_match",
-      "from_ip": "192.168.80.250",
-      "subnet": "192.168.80.0/24"
+      "method": "eveng"
+    },
+    {
+      "from": "SW2",
+      "to": "R6",
+      "from_port": "Ethernet0/3",
+      "to_port": "Ethernet0/0",
+      "status": "up",
+      "method": "eveng",
+      "to_ip": "192.168.80.143"
+    },
+    {
+      "from": "Linux",
+      "to": "Net",
+      "from_port": "e0",
+      "to_port": "",
+      "status": "up",
+      "method": "eveng"
     }
   ]
 }

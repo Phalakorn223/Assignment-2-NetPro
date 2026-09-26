@@ -228,7 +228,7 @@ class ConnectionManager:
                         "ip": ip,
                         "username": device_params.get("username", "cisco"),
                         "password": device_params.get("password", "cisco"),
-                        "secret":   device_params.get("secret", device_params.get("password", "cisco")),
+                        "secret":   (device_params.get("secret") or device_params.get("password") or "cisco").strip(),
                         "port":     int(device_params.get("port", 22)),
                         "conn_timeout": 10,
                     }
@@ -246,9 +246,9 @@ class ConnectionManager:
 
             elif conn_type == "TELNET":
                 port = int(device_params.get("port", 23))
-                username = device_params.get("username", "").strip()
-                password = device_params.get("password", "").strip()
-                secret = device_params.get("secret", password).strip()
+                username = (device_params.get("username") or "").strip()
+                password = (device_params.get("password") or "").strip()
+                secret = (device_params.get("secret") or password or "cisco").strip()
 
                 # สำหรับ EVE-NG console port (มักจะเป็น 30000-40000) ที่ไม่ต้องใส่ user/pass
                 # หรือ telnet ทั่วไป
@@ -341,11 +341,14 @@ class ConnectionManager:
         if self.is_connected(device_id, check_alive=True):
             return True
         dev = get_device_by_id(device_id)
-        if dev and (dev.get("device_type_label") or "").lower() not in ("pc", "network"):
-            target_id = dev.get("id", device_id)
-            print(f"[ConnectionManager] Auto-connecting to {target_id}...")
-            res = self.connect(target_id, dev, skip_ping=True)
-            return res.get("success", False)
+        if dev:
+            conn_type = (dev.get("connection_type") or "").upper()
+            dtype = (dev.get("device_type_label") or "").lower()
+            if conn_type in ("SSH", "TELNET") or dtype not in ("pc", "network"):
+                target_id = dev.get("id", device_id)
+                print(f"[ConnectionManager] Auto-connecting to {target_id}...")
+                res = self.connect(target_id, dev, skip_ping=True)
+                return res.get("success", False)
         return False
 
     def send_command(self, device_id: str, command: str, use_textfsm: bool = False, retry: bool = True) -> dict:
@@ -439,18 +442,21 @@ class ConnectionManager:
                     except Exception:
                         pass
 
+                is_linux = entry.get("is_linux", False)
+                newline = "\n" if is_linux else "\r\n"
+
                 # รองรับ Ctrl+C (Break/Interrupt signal)
                 if command in ("\x03", "^C"):
                     handler.write_channel("\x03")
                     raw = handler.read_channel_timing(last_read=0.5, read_timeout=2.0)
                 elif not cmd_str:
                     # ถ้าส่งว่างเพื่อดึง prompt สดจากอุปกรณ์
-                    handler.write_channel("\r\n")
+                    handler.write_channel(newline)
                     raw = handler.read_channel_timing(last_read=1.0, read_timeout=4.0)
                 else:
                     # ส่งคำสั่งจริงไปยัง Channel
-                    handler.write_channel(f"{cmd_str}\r\n")
-                    last_read_time = 1.8 if entry.get("is_linux") else 1.5
+                    handler.write_channel(f"{cmd_str}{newline}")
+                    last_read_time = 1.8 if is_linux else 1.5
                     raw = handler.read_channel_timing(last_read=last_read_time, read_timeout=25.0)
 
                 # จัดการ Paging กรณีอุปกรณ์ส่ง output ยาวและติด --More-- (ตาม Section 14 & 24 ของ network_cli_teraterm_putty_vibecoding.md)
@@ -674,11 +680,36 @@ class ConnectionManager:
             entry = self.pool[entry_key]
             handler = entry.get("handler")
             conn_type = entry.get("type")
-            if conn_type in ("SSH", "TELNET") and hasattr(handler, "is_alive"):
+            is_pw_pending = entry.get("is_password_pending", False)
+
+            if conn_type == "SSH":
+                # สำหรับ SSH: ตรวจ transport socket state โดยตรง ไม่ส่ง null byte (\x00) เข้า channel
+                # เพื่อป้องกัน \x00 ปนเปื้อนใน password buffer ของ Linux sudo / Cisco password prompt
+                try:
+                    rc = getattr(handler, "remote_conn", None)
+                    t = getattr(rc, "transport", None) if rc is not None else None
+                    alive = True
+                    if rc is not None and t is not None:
+                        is_active = getattr(t, "is_active", None)
+                        if callable(is_active):
+                            alive = bool(is_active())
+                        if getattr(rc, "closed", False) is True:
+                            alive = False
+                    if not alive:
+                        print(f"[ConnectionManager] SSH transport dead for {entry_key}, removing from pool...")
+                        self.disconnect(entry_key)
+                        return False
+                except Exception:
+                    self.disconnect(entry_key)
+                    return False
+            elif conn_type == "TELNET" and hasattr(handler, "is_alive"):
+                # สำหรับ Telnet: ไม่ส่ง keepalive probe หากอุปกรณ์กำลังรอป้อน Password
+                if is_pw_pending:
+                    return True
                 try:
                     alive = handler.is_alive()
                     if not alive:
-                        print(f"[ConnectionManager] Socket dead for {entry_key}, removing from pool...")
+                        print(f"[ConnectionManager] Telnet dead for {entry_key}, removing from pool...")
                         self.disconnect(entry_key)
                         return False
                 except Exception:
@@ -693,7 +724,11 @@ class ConnectionManager:
             if tid in self.pool:
                 entry = self.pool[tid]
                 handler = entry.get("handler")
-                if entry.get("type") in ("SSH", "TELNET") and hasattr(handler, "is_alive"):
+                conn_type = entry.get("type")
+                # ข้าม keepalive ถ้ากำลังรอ Password หรือเป็น Linux SSH เพื่อไม่ให้ส่ง \x00 ปนใน buffer
+                if entry.get("is_password_pending") or entry.get("is_linux"):
+                    continue
+                if conn_type in ("SSH", "TELNET") and hasattr(handler, "is_alive"):
                     try:
                         if not handler.is_alive():
                             self.disconnect(tid)

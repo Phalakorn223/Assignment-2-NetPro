@@ -272,7 +272,8 @@ class TestCliAndTelnetSwitch(unittest.TestCase):
             self.mgr.pool["R1"] = {"handler": mock_handler, "type": "TELNET", "params": {"id": "R1"}}
             return {"success": True, "message": "Connected"}
 
-        with patch.object(self.mgr, "connect", side_effect=mock_conn):
+        with patch.object(flask_app.conn_mgr, "connect", side_effect=mock_conn), \
+             patch.object(flask_app.conn_mgr, "send_interactive", return_value={"success": True, "prompt": "R1#"}):
             res = self.client.post("/api/cli/reconnect", json={"device_id": "R1"})
             self.assertEqual(res.status_code, 200)
             data = res.get_json()
