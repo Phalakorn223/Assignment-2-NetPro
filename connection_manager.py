@@ -510,7 +510,7 @@ class ConnectionManager:
                         pass
 
                 is_linux = entry.get("is_linux", False)
-                newline = "\n" if is_linux else "\r\n"
+                newline = "\n" 
 
                 # รองรับ Ctrl+C (Break/Interrupt signal)
                 if command in ("\x03", "^C"):
