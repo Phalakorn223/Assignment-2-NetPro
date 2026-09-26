@@ -937,6 +937,19 @@ def _save_topology_cache(data):
         pass
 
 
+@app.route("/api/topology/clear", methods=["POST"])
+def clear_topology_cache():
+    """ลบ topology cache ประจำเครื่องนี้ เพื่อให้เริ่มสร้างผังใหม่"""
+    global _topology_cache
+    _topology_cache = None
+    if os.path.exists("topology_cache.json"):
+        try:
+            os.remove("topology_cache.json")
+        except Exception:
+            pass
+    return jsonify({"success": True, "message": "ล้าง Topology Cache ในเครื่องเรียบร้อยแล้ว"})
+
+
 @app.route("/api/eveng/labs", methods=["GET", "POST"])
 def list_eveng_labs():
     """ดึงรายชื่อ Labs ทั้งหมดจาก EVE-NG เพื่อให้ผู้ใช้เลือกได้สะดวก"""

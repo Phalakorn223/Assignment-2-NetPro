@@ -934,6 +934,31 @@ async function refreshTopology() {
     }
 }
 
+async function clearTopology() {
+    if (!confirm("คุณต้องการล้าง Topology แผนผังในเครื่องนี้ เพื่อสร้างหรือค้นหาผังใหม่ใช่หรือไม่?")) return;
+    const btn = document.getElementById("btn-clear-topo");
+    const loading = document.getElementById("topo-loading");
+    if (btn) btn.disabled = true;
+    if (loading) loading.classList.remove("d-none");
+    try {
+        const res = await fetch("/api/topology/clear", { method: "POST" });
+        const data = await res.json();
+        if (data.success) {
+            renderVisNetwork([], []);
+            const nodeBadge = document.getElementById("node-count-badge");
+            const edgeBadge = document.getElementById("edge-count-badge");
+            if (nodeBadge) nodeBadge.textContent = "0 Devices";
+            if (edgeBadge) edgeBadge.textContent = "0 Links";
+            showNotification("ล้าง Topology ในเครื่องเรียบร้อยแล้ว (พร้อมให้สร้างหรือดึงผังใหม่)", "success");
+        }
+    } catch (e) {
+        showNotification("ไม่สามารถล้าง Topology ได้", "error");
+    } finally {
+        if (loading) loading.classList.add("d-none");
+        if (btn) btn.disabled = false;
+    }
+}
+
 function renderVisNetwork(nodes, edges) {
     const container = document.getElementById("topology-container");
     if (!container || typeof vis === "undefined") return;

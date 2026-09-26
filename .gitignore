@@ -4,3 +4,7 @@ __pycache__/
 *.exe
 .env
 *.log
+
+# Local device inventory and topology cache (แยกเครื่องใครเครื่องมัน)
+devices.json
+topology_cache.json
