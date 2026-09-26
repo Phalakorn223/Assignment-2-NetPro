@@ -787,11 +787,26 @@ def cli_reconnect():
 
 @app.route("/api/connections/keepalive", methods=["POST"])
 def connections_keepalive():
-    """ส่ง Telnet/SSH keepalive NOP เพื่อรักษา connection กับ Switch/Router ไม่ให้ idle timeout"""
-    data = request.json or {}
+    """ส่ง Telnet/SSH keepalive NOP เพื่อรักษา connection กับ Switch/Router ไม่ให้ idle timeout พร้อม auto-reconnect"""
+    data = request.get_json(silent=True) or {}
     device_id = data.get("device_id")
-    conn_mgr.send_keepalive(device_id)
+    auto_reconnect = data.get("auto_reconnect", True)
+    conn_mgr.send_keepalive(device_id, auto_reconnect=auto_reconnect)
     return jsonify({"success": True, "connected": conn_mgr.get_connected_devices()})
+
+
+@app.route("/api/connections/auto-connect", methods=["POST"])
+@app.route("/api/connections/reconnect-all", methods=["POST"])
+def auto_connect_devices():
+    """Auto-connect / Reconnect อุปกรณ์ใน Inventory พร้อมกันแบบ Concurrent ในเบื้องหลัง"""
+    data = request.get_json(silent=True) or {}
+    device_ids = data.get("device_ids")
+    results = conn_mgr.auto_reconnect_all(device_ids=device_ids)
+    return jsonify({
+        "success": True,
+        "results": results,
+        "connected": conn_mgr.get_connected_devices()
+    })
 
 
 # ===========================================================================

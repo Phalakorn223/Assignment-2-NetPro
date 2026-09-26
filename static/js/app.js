@@ -54,8 +54,156 @@ function switchTab(tabId) {
 }
 
 // =============================================================================
-// DEVICE INVENTORY
+// DEVICE INVENTORY & AUTO-RECONNECT ENGINE
 // =============================================================================
+let isAutoConnectingAll = false;
+let autoReconnectTimer = null;
+
+function updateInventoryDot(deviceId, state) {
+    const dot = document.getElementById(`inv-dot-${deviceId}`);
+    if (!dot) return;
+    dot.className = `inv-status-dot ${state}`;
+    if (state === "connected") dot.title = "Connected (Online)";
+    else if (state === "connecting") dot.title = "Connecting / Auto-reconnecting...";
+    else dot.title = "Disconnected (Offline - Click to Connect)";
+}
+
+async function autoConnectDevice(deviceId, silent = false) {
+    const dev = inventoryDevices.find(d => d.id === deviceId || d.name === deviceId);
+    if (!dev) return;
+    const connType = (dev.connection_type || "SSH").toUpperCase();
+    const dtype = (dev.device_type_label || "").toLowerCase();
+    if (dtype === "network" || dtype === "cloud" || (dtype === "pc" && connType === "PC")) return;
+
+    updateInventoryDot(dev.id, "connecting");
+
+    const badge = document.getElementById("cli-conn-badge");
+    if (badge && activeDeviceId === dev.id) {
+        badge.className = "badge badge-warning";
+        badge.style.background = "#854d0e";
+        badge.style.borderColor = "#eab308";
+        badge.style.color = "#fef08a";
+        badge.textContent = `◌ Connecting to ${dev.name || dev.id}...`;
+    }
+
+    try {
+        const res = await fetch(`/api/connect/${encodeURIComponent(dev.id)}`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ skip_ping: true })
+        });
+        const data = await res.json();
+        if (data.success) {
+            dev.connected = true;
+            updateInventoryDot(dev.id, "connected");
+            if (activeDeviceId === dev.id) {
+                updateCliConnectionBadge();
+                refreshDeviceCliPrompt();
+            }
+            if (!silent) {
+                showNotification(`เชื่อมต่อกับ ${dev.name || dev.id} สำเร็จแล้ว`, "success");
+            }
+        } else {
+            updateInventoryDot(dev.id, "disconnected");
+            if (activeDeviceId === dev.id) {
+                updateCliConnectionBadge();
+            }
+        }
+    } catch (e) {
+        updateInventoryDot(dev.id, "disconnected");
+        if (activeDeviceId === dev.id) {
+            updateCliConnectionBadge();
+        }
+    }
+}
+
+async function triggerAutoConnectAll(userInitiated = false) {
+    if (isAutoConnectingAll) return;
+    isAutoConnectingAll = true;
+
+    const btn = document.getElementById("btn-reconnect-all");
+    if (btn) {
+        btn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> Reconnecting...`;
+        btn.disabled = true;
+    }
+
+    // Mark disconnected devices as connecting
+    inventoryDevices.forEach(dev => {
+        const connType = (dev.connection_type || "SSH").toUpperCase();
+        const dtype = (dev.device_type_label || "").toLowerCase();
+        if (dtype === "network" || dtype === "cloud" || (dtype === "pc" && connType === "PC")) return;
+        if (!dev.connected) {
+            updateInventoryDot(dev.id, "connecting");
+        }
+    });
+
+    try {
+        const res = await fetch("/api/connections/auto-connect", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({})
+        });
+        const data = await res.json();
+        if (data.success && data.connected) {
+            const connectedIds = new Set(data.connected.map(c => c.id));
+            let newlyConnected = 0;
+            inventoryDevices.forEach(dev => {
+                const isConn = connectedIds.has(dev.id) || connectedIds.has(dev.name);
+                if (isConn && !dev.connected) newlyConnected++;
+                dev.connected = isConn;
+                updateInventoryDot(dev.id, isConn ? "connected" : "disconnected");
+            });
+            updateCliConnectionBadge();
+            if (activeDeviceId) {
+                const act = inventoryDevices.find(d => d.id === activeDeviceId);
+                if (act && act.connected && !cliDirectPrompt) {
+                    refreshDeviceCliPrompt();
+                }
+            }
+            if (userInitiated) {
+                showNotification(`ระบบ Auto-Reconnect ตรวจสอบและเชื่อมต่ออุปกรณ์สำเร็จ (${newlyConnected} เครื่อง)`, "success");
+            }
+        }
+    } catch (e) {
+        console.error("Auto-connect all failed:", e);
+    } finally {
+        isAutoConnectingAll = false;
+        if (btn) {
+            btn.innerHTML = `<i class="fa-solid fa-rotate-right"></i> Reconnect All`;
+            btn.disabled = false;
+        }
+    }
+}
+
+function startAutoReconnectLoop() {
+    if (autoReconnectTimer) clearInterval(autoReconnectTimer);
+    autoReconnectTimer = setInterval(async () => {
+        try {
+            const res = await fetch("/api/connections/keepalive", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ auto_reconnect: true })
+            });
+            const data = await res.json();
+            if (data.success && data.connected) {
+                const connectedIds = new Set(data.connected.map(c => c.id));
+                let changed = false;
+                inventoryDevices.forEach(dev => {
+                    const isConn = connectedIds.has(dev.id) || connectedIds.has(dev.name);
+                    if (dev.connected !== isConn) {
+                        dev.connected = isConn;
+                        changed = true;
+                        updateInventoryDot(dev.id, isConn ? "connected" : "disconnected");
+                    }
+                });
+                if (changed) {
+                    updateCliConnectionBadge();
+                }
+            }
+        } catch (e) {}
+    }, 15000);
+}
+
 async function loadInventory() {
     try {
         const res = await fetch("/api/inventory");
@@ -66,6 +214,9 @@ async function loadInventory() {
             populateDeviceSelects();
             runAutoDiscovery();
             refreshInterfaceTable();
+            // Automatically auto-connect and maintain connection in background
+            triggerAutoConnectAll(false);
+            startAutoReconnectLoop();
         }
     } catch (e) { console.error("Inventory load failed:", e); }
 }
@@ -81,13 +232,12 @@ function renderInventoryList() {
     inventoryDevices.forEach(dev => {
         const item = document.createElement("div");
         item.className = "inventory-item" + (dev.id === activeDeviceId ? " active" : "");
-        // Show IP:Port for EVE-NG console devices (port > 1000 and same IP pattern)
         const port = dev.port || 0;
         const ipDisplay = dev.ip
             ? (port > 1000 ? `${dev.ip}:${port}` : dev.ip)
             : (dev.serial_port || '');
         item.innerHTML = `
-            <span class="inv-status-dot ${dev.connected ? 'connected' : 'disconnected'}"></span>
+            <span class="inv-status-dot ${dev.connected ? 'connected' : 'disconnected'}" id="inv-dot-${dev.id}" title="${dev.connected ? 'Connected' : 'Disconnected'}"></span>
             <span class="inv-name">${dev.name || dev.id}</span>
             <span class="inv-ip">${ipDisplay}</span>
             <span class="inv-type-badge">${(dev.connection_type || 'SSH').toUpperCase()}</span>
@@ -171,13 +321,19 @@ function updateCliConnectionBadge() {
         badge.style.background = "#065f46";
         badge.style.borderColor = "#10b981";
         badge.style.color = "#6ee7b7";
+        badge.style.cursor = "default";
+        badge.title = "Connected (Online)";
+        badge.onclick = null;
         badge.textContent = `● ${connType} ${endpoint}`;
     } else {
         badge.className = "badge badge-warning";
         badge.style.background = "#374151";
         badge.style.borderColor = "#6b7280";
         badge.style.color = "#9ca3af";
-        badge.textContent = `○ ${connType} (OFFLINE)`;
+        badge.style.cursor = "pointer";
+        badge.title = "Click to Reconnect Session";
+        badge.onclick = (e) => reconnectActiveCli(e);
+        badge.textContent = `○ ${connType} (OFFLINE — Click to Reconnect)`;
     }
 }
 
@@ -211,27 +367,20 @@ function selectActiveDevice(deviceId, forceRefresh = true) {
             })));
         } catch (e) {}
     }
+
+    // Auto-reconnect / auto-connect if device is currently disconnected
+    if (dev && !dev.connected) {
+        const connType = (dev.connection_type || "SSH").toUpperCase();
+        const dtype = (dev.device_type_label || "").toLowerCase();
+        if (dtype !== "network" && dtype !== "cloud" && !(dtype === "pc" && connType === "PC")) {
+            autoConnectDevice(dev.id);
+        }
+    }
 }
 
 function onActiveDeviceChange() {
     const newId = document.getElementById("active-device-select").value;
-    if (activeDeviceId !== newId) {
-        saveCurrentDeviceTerminalState();
-        activeDeviceId = newId;
-        restoreDeviceTerminalState(activeDeviceId);
-    }
-    updateActiveInventoryHighlight();
-    updateInterfaceOptions();
-    refreshInterfaceTable(true);
-
-    if (typeof visNodes !== "undefined" && visNodes) {
-        try {
-            visNodes.update(visNodes.get().map(n => ({
-                id: n.id,
-                borderWidth: n.id === activeDeviceId ? 3 : 1.5,
-            })));
-        } catch (e) {}
-    }
+    selectActiveDevice(newId);
 }
 
 function updateActiveInventoryHighlight() {
@@ -2147,6 +2296,7 @@ async function sendBreakSignal(e) {
 async function reconnectActiveCli(e) {
     if (e) e.stopPropagation();
     appendCliOutput(`[Connecting to ${activeDeviceId} console...]`);
+    updateInventoryDot(activeDeviceId, "connecting");
     try {
         const res = await fetch("/api/cli/reconnect", {
             method: "POST",
@@ -2157,12 +2307,19 @@ async function reconnectActiveCli(e) {
         if (data.success) {
             appendCliOutput(`[Connected to ${activeDeviceId}]`);
             if (data.prompt) setCliDirectPrompt(data.prompt);
+            const dev = inventoryDevices.find(d => d.id === activeDeviceId || d.name === activeDeviceId);
+            if (dev) dev.connected = true;
+            updateInventoryDot(activeDeviceId, "connected");
         } else {
             appendCliOutput(`% Reconnect failed: ${data.message}`);
+            const dev = inventoryDevices.find(d => d.id === activeDeviceId || d.name === activeDeviceId);
+            if (dev) dev.connected = false;
+            updateInventoryDot(activeDeviceId, "disconnected");
         }
         updateCliConnectionBadge();
     } catch (err) {
         appendCliOutput(`% Connection error: ${err.message}`);
+        updateInventoryDot(activeDeviceId, "disconnected");
     }
     scrollToBottom();
     focusCliInput();

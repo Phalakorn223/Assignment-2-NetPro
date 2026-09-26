@@ -64,9 +64,14 @@ body{font-family:var(--font);background:var(--bg-dark);color:var(--text);height:
 .inventory-list{max-height:130px;overflow-y:auto;padding:4px 0}
 .inventory-item{display:flex;align-items:center;gap:10px;padding:6px 16px;font-size:12px;border-bottom:1px solid rgba(38,51,77,.5)}
 .inventory-item:hover{background:rgba(59,130,246,.06)}
-.inv-status-dot{width:7px;height:7px;border-radius:50%;flex-shrink:0}
+.inv-status-dot{width:7px;height:7px;border-radius:50%;flex-shrink:0;transition:all .3s ease}
 .inv-status-dot.connected{background:var(--success);box-shadow:0 0 6px var(--success)}
 .inv-status-dot.disconnected{background:var(--text-dim)}
+.inv-status-dot.connecting{background:#f59e0b;box-shadow:0 0 7px #f59e0b;animation:inv-dot-pulse .9s infinite alternate}
+@keyframes inv-dot-pulse{from{opacity:.35;transform:scale(0.85)}to{opacity:1;transform:scale(1.2)}}
+.btn-reconnect-all{background:rgba(59,130,246,.12);border:1px solid rgba(59,130,246,.35);color:#93c5fd;font-size:11px;padding:3px 9px;border-radius:4px;cursor:pointer;display:inline-flex;align-items:center;gap:5px;transition:all .2s;font-weight:500}
+.btn-reconnect-all:hover{background:rgba(59,130,246,.25);border-color:#60a5fa;color:#fff}
+.btn-reconnect-all:disabled{opacity:.5;cursor:not-allowed}
 .inv-name{font-weight:600;flex:1}
 .inv-ip{color:var(--text-muted);font-family:var(--mono);font-size:11px}
 .inv-type-badge{font-size:10px;padding:2px 7px;border-radius:10px;background:rgba(59,130,246,.15);color:var(--primary)}

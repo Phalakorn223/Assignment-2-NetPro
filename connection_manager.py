@@ -785,8 +785,8 @@ class ConnectionManager:
                     return False
         return True
 
-    def send_keepalive(self, device_id: str = None):
-        """ส่ง Telnet NOP หรือ SSH keepalive เพื่อป้องกัน Switch ปิดการเชื่อมต่อเนื่องจาก idle"""
+    def send_keepalive(self, device_id: str = None, auto_reconnect: bool = True):
+        """ส่ง Telnet NOP หรือ SSH keepalive เพื่อป้องกัน Switch ปิดการเชื่อมต่อเนื่องจาก idle พร้อม auto-reconnect"""
         targets = [device_id] if device_id else list(self.pool.keys())
         for tid in targets:
             if tid in self.pool:
@@ -800,10 +800,77 @@ class ConnectionManager:
                     try:
                         if not handler.is_alive():
                             self.disconnect(tid)
-                            self._ensure_connection(tid)
+                            if auto_reconnect:
+                                self._ensure_connection(tid)
                     except Exception:
                         self.disconnect(tid)
-                        self._ensure_connection(tid)
+                        if auto_reconnect:
+                            self._ensure_connection(tid)
+            elif auto_reconnect and device_id:
+                self._ensure_connection(device_id)
+
+    def reconnect(self, device_id: str) -> dict:
+        """ตัดการเชื่อมต่อเดิมและเชื่อมต่อใหม่ทันที"""
+        dev = get_device_by_id(device_id)
+        target_id = dev.get("id", device_id) if dev else device_id
+        self.disconnect(target_id)
+        self.disconnect(device_id)
+        if dev:
+            return self.connect(target_id, dev, skip_ping=True)
+        return {"success": False, "message": f"ไม่พบ device '{device_id}' ใน inventory"}
+
+    def auto_reconnect_all(self, device_ids: Optional[list] = None) -> dict:
+        """
+        เชื่อมต่อหรือ Reconnect อุปกรณ์ทั้งหมดใน inventory แบบ Concurrent (ThreadPoolExecutor)
+        เพื่อความรวดเร็วและไม่บล็อกการทำงานของเซิร์ฟเวอร์
+        """
+        all_devs = load_inventory()
+        if device_ids:
+            target_devs = [d for d in all_devs if d.get("id") in device_ids or d.get("name") in device_ids]
+        else:
+            target_devs = all_devs
+
+        results = {}
+
+        def _worker(dev):
+            dev_id = dev.get("id") or dev.get("name")
+            if not dev_id:
+                return None
+            conn_type = (dev.get("connection_type") or "").upper()
+            dtype = (dev.get("device_type_label") or "").lower()
+
+            if dtype in ("network", "cloud") or (dtype == "pc" and conn_type == "PC"):
+                return dev_id, {"success": True, "skipped": True}
+
+            if self.is_connected(dev_id, check_alive=True):
+                return dev_id, {"success": True, "connected": True, "message": "Already connected"}
+
+            # ตรวจสอบว่าพอร์ต socket ตอบสนองหรือไม่ (สำหรับ SSH / Telnet)
+            ip = dev.get("ip")
+            port = int(dev.get("port") or (22 if conn_type == "SSH" else 23))
+            if conn_type in ("SSH", "TELNET") and ip:
+                try:
+                    with socket.create_connection((ip, port), timeout=1.2):
+                        pass
+                except Exception as e:
+                    return dev_id, {"success": False, "connected": False, "message": f"Host/Port unreachable ({ip}:{port})"}
+
+            res = self.connect(dev_id, dev, skip_ping=True)
+            return dev_id, res
+
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        with ThreadPoolExecutor(max_workers=6) as executor:
+            futures = [executor.submit(_worker, d) for d in target_devs]
+            for f in as_completed(futures):
+                try:
+                    item = f.result()
+                    if item:
+                        did, rdata = item
+                        results[did] = rdata
+                except Exception:
+                    pass
+
+        return results
 
     def get_connected_devices(self) -> list:
         return [{"id": k, "type": v["type"]} for k, v in self.pool.items()]
