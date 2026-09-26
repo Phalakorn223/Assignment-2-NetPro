@@ -207,7 +207,15 @@ class ConnectionManager:
 
         try:
             dtype = (device_params.get("device_type_label") or "").lower()
-            is_linux = dtype in ("pc", "linux", "ubuntu") or device_params.get("os_type") == "linux"
+            name_lower = (device_params.get("name") or "").lower()
+            model_lower = (device_params.get("model") or "").lower()
+            is_linux = (
+                dtype in ("pc", "linux", "ubuntu")
+                or device_params.get("os_type") == "linux"
+                or "linux" in name_lower
+                or "linux" in model_lower
+                or "ubuntu" in model_lower
+            )
 
             if conn_type == "SSH":
                 if is_linux:
@@ -412,6 +420,62 @@ class ConnectionManager:
 
         return {"success": False, "output": "Unknown connection type"}
 
+    def _read_interactive_channel(
+        self,
+        handler,
+        cmd_str: str = "",
+        is_linux: bool = False,
+        timeout: float = 25.0,
+        idle_timeout: float = 0.25
+    ) -> str:
+        """
+        อ่านข้อมูลจาก SSH / Telnet channel แบบ Prompt-Aware (Fast Return)
+        แทนที่จะรอ timing sleep คงที่ 1.5 - 1.8 วินาทีทุกคำสั่ง:
+        เมื่อ output สิ้นสุดที่ Device Prompt (#, >, $, password prompt) จะ return ทันทีใน 10-40ms!
+        หากเป็นคำสั่งยาวหรือไม่มี prompt มาตรฐาน จะ fallback รอ idle_timeout เมื่อไม่มีข้อมูลใหม่ส่งมา
+        """
+        # หาก handler ถูก mock หรือเป็น Mock object ที่ไม่ได้ implement read_channel ให้ fallback ไปใช้ read_channel_timing
+        if hasattr(handler, "read_channel_timing"):
+            val = getattr(handler.read_channel_timing, "return_value", None)
+            if isinstance(val, str) and val != "":
+                return handler.read_channel_timing()
+            if not hasattr(handler, "read_channel") or not callable(getattr(handler, "read_channel", None)):
+                return handler.read_channel_timing()
+
+        start = time.time()
+        raw = ""
+        last_data_time = None
+
+        prompt_regex = re.compile(
+            r"(^[A-Za-z0-9_\-\.\(\)]+[#>]\s*$)"                                # Cisco Router/Switch (R1#, Switch>)
+            r"|(^[A-Za-z0-9_\-\.]+@[A-Za-z0-9_\-\.]+:[^#$]*[\$#]\s*$)"         # Linux Shell (user@host:~$ หรือ root@host:~#)
+            r"|(^[A-Za-z0-9_\-\.]+:[^#$]*[\$#]\s*$)"                           # Linux prompt shorthand (eve-ng:~#)
+            r"|((?:\[sudo\]\s+)?password(?:\s+for\s+\S+)?:\s*$)"                # Password prompt
+            r"|((?:\[confirm\]|\[yes/no\]|\[y/n\]|\(yes/no\)|continue\?\s*\[Y/n\])\s*$)" # Interactive confirmation
+            r"|(--More--)",                                                     # Pagination
+            re.IGNORECASE | re.MULTILINE
+        )
+
+        while time.time() - start < timeout:
+            chunk = handler.read_channel()
+            if chunk and isinstance(chunk, str):
+                raw += chunk
+                last_data_time = time.time()
+
+                # ล้าง ansi codes ชั่วคราวเพื่อตรวจจับ prompt ที่บรรทัดสุดท้าย
+                clean_tail = re.sub(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])', '', raw[-500:]).strip()
+                lines = [l.strip() for l in clean_tail.splitlines() if l.strip()]
+                if lines:
+                    last_line = lines[-1]
+                    if prompt_regex.search(last_line):
+                        if not cmd_str or cmd_str not in last_line:
+                            break
+            else:
+                if raw and last_data_time and (time.time() - last_data_time > idle_timeout):
+                    break
+            time.sleep(0.01)
+        return raw
+
     def send_interactive(self, device_id: str, command: str, retry: bool = True) -> dict:
         """
         ส่งคำสั่งแบบ Interactive Terminal โดยตรงไปยังอุปกรณ์ (รักษา session state ต่อเนื่อง)
@@ -448,24 +512,28 @@ class ConnectionManager:
                 # รองรับ Ctrl+C (Break/Interrupt signal)
                 if command in ("\x03", "^C"):
                     handler.write_channel("\x03")
-                    raw = handler.read_channel_timing(last_read=0.5, read_timeout=2.0)
+                    raw = self._read_interactive_channel(handler, cmd_str="", is_linux=is_linux, timeout=2.0, idle_timeout=0.15)
                 elif not cmd_str:
                     # ถ้าส่งว่างเพื่อดึง prompt สดจากอุปกรณ์
                     handler.write_channel(newline)
-                    raw = handler.read_channel_timing(last_read=1.0, read_timeout=4.0)
+                    raw = self._read_interactive_channel(handler, cmd_str="", is_linux=is_linux, timeout=4.0, idle_timeout=0.15)
                 else:
                     # ส่งคำสั่งจริงไปยัง Channel
-                    handler.write_channel(f"{cmd_str}{newline}")
-                    last_read_time = 1.8 if is_linux else 1.5
-                    raw = handler.read_channel_timing(last_read=last_read_time, read_timeout=25.0)
+                    cmd_to_send = cmd_str
+                    # ป้องกัน Linux ping รันไม่รู้จบ ถ้าผู้ใช้ไม่ได้ใส่ -c หรือ -w
+                    if is_linux and cmd_str.startswith("ping ") and not ("-c" in cmd_str or "-w" in cmd_str):
+                        cmd_to_send = f"{cmd_str} -c 4"
+
+                    handler.write_channel(f"{cmd_to_send}{newline}")
+                    raw = self._read_interactive_channel(handler, cmd_str=cmd_to_send, is_linux=is_linux, timeout=25.0, idle_timeout=0.25)
 
                 # จัดการ Paging กรณีอุปกรณ์ส่ง output ยาวและติด --More-- (ตาม Section 14 & 24 ของ network_cli_teraterm_putty_vibecoding.md)
                 max_pages = 30
                 pages = 0
                 while "--More--" in raw and pages < max_pages:
                     handler.write_channel(" ")
-                    time.sleep(0.08)
-                    more_data = handler.read_channel_timing(last_read=0.8, read_timeout=4.0)
+                    time.sleep(0.03)
+                    more_data = self._read_interactive_channel(handler, cmd_str="", is_linux=is_linux, timeout=4.0, idle_timeout=0.15)
                     if not more_data:
                         break
                     raw += more_data

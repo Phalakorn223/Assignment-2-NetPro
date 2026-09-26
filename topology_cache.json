@@ -2,75 +2,84 @@
   "nodes": [
     {
       "id": "R1",
+      "node_id": "1",
       "name": "R1",
       "type": "router",
-      "ip": "192.168.80.138",
+      "ip": "",
       "model": "L3-ADVENTERPRISEK9-M-15.4-2T.bin",
-      "status": "connected"
+      "status": "discovered"
     },
     {
       "id": "SW1",
+      "node_id": "2",
       "name": "SW1",
       "type": "router",
-      "ip": "192.168.80.140",
+      "ip": "",
       "model": "i86bi_linux_l2-ipbasek9-ms.high_iron_aug9_2017b.bin",
-      "status": "connected"
+      "status": "discovered"
     },
     {
       "id": "R2",
+      "node_id": "3",
       "name": "R2",
       "type": "router",
-      "ip": "192.168.80.135",
+      "ip": "",
       "model": "L3-ADVENTERPRISEK9-M-15.4-2T.bin",
-      "status": "connected"
+      "status": "discovered"
     },
     {
       "id": "R3",
+      "node_id": "4",
       "name": "R3",
       "type": "router",
-      "ip": "192.168.80.134",
+      "ip": "",
       "model": "L3-ADVENTERPRISEK9-M-15.4-2T.bin",
-      "status": "connected"
+      "status": "discovered"
     },
     {
       "id": "R5",
+      "node_id": "5",
       "name": "R5",
       "type": "router",
-      "ip": "192.168.80.145",
+      "ip": "",
       "model": "L3-ADVENTERPRISEK9-M-15.4-2T.bin",
-      "status": "connected"
+      "status": "discovered"
     },
     {
       "id": "R4",
+      "node_id": "6",
       "name": "R4",
       "type": "router",
-      "ip": "192.168.80.144",
+      "ip": "",
       "model": "L3-ADVENTERPRISEK9-M-15.4-2T.bin",
-      "status": "connected"
+      "status": "discovered"
     },
     {
       "id": "SW2",
+      "node_id": "7",
       "name": "SW2",
       "type": "router",
-      "ip": "192.168.80.141",
+      "ip": "",
       "model": "i86bi_linux_l2-ipbasek9-ms.high_iron_aug9_2017b.bin",
-      "status": "connected"
+      "status": "discovered"
     },
     {
       "id": "R6",
+      "node_id": "8",
       "name": "R6",
       "type": "router",
-      "ip": "192.168.80.143",
+      "ip": "",
       "model": "L3-ADVENTERPRISEK9-M-15.4-2T.bin",
-      "status": "connected"
+      "status": "discovered"
     },
     {
       "id": "Linux",
+      "node_id": "9",
       "name": "Linux",
       "type": "router",
-      "ip": "127.0.0.1",
+      "ip": "",
       "model": "linux-ubuntu-21.04-desktop",
-      "status": "connected"
+      "status": "discovered"
     },
     {
       "id": "Net",
@@ -83,15 +92,6 @@
   ],
   "edges": [
     {
-      "from": "R1",
-      "to": "SW1",
-      "from_port": "Ethernet0/0",
-      "to_port": "Ethernet0/1",
-      "status": "up",
-      "method": "eveng",
-      "from_ip": "192.168.80.138"
-    },
-    {
       "from": "SW1",
       "to": "Net",
       "from_port": "Ethernet0/0",
@@ -101,39 +101,27 @@
     },
     {
       "from": "SW1",
-      "to": "R2",
-      "from_port": "Ethernet0/2",
+      "to": "R1",
+      "from_port": "Ethernet0/1",
       "to_port": "Ethernet0/0",
       "status": "up",
-      "method": "eveng",
-      "to_ip": "192.168.80.135"
+      "method": "eveng"
     },
     {
-      "from": "SW1",
-      "to": "R3",
-      "from_port": "Ethernet0/3",
-      "to_port": "Ethernet0/0",
-      "status": "up",
-      "method": "eveng",
-      "to_ip": "192.168.80.134"
-    },
-    {
-      "from": "R5",
-      "to": "SW2",
+      "from": "R2",
+      "to": "SW1",
       "from_port": "Ethernet0/0",
       "to_port": "Ethernet0/2",
       "status": "up",
-      "method": "eveng",
-      "from_ip": "192.168.80.145"
+      "method": "eveng"
     },
     {
-      "from": "R4",
-      "to": "SW2",
+      "from": "R3",
+      "to": "SW1",
       "from_port": "Ethernet0/0",
-      "to_port": "Ethernet0/1",
+      "to_port": "Ethernet0/3",
       "status": "up",
-      "method": "eveng",
-      "from_ip": "192.168.80.144"
+      "method": "eveng"
     },
     {
       "from": "SW2",
@@ -145,12 +133,27 @@
     },
     {
       "from": "SW2",
-      "to": "R6",
-      "from_port": "Ethernet0/3",
+      "to": "R4",
+      "from_port": "Ethernet0/1",
       "to_port": "Ethernet0/0",
       "status": "up",
-      "method": "eveng",
-      "to_ip": "192.168.80.143"
+      "method": "eveng"
+    },
+    {
+      "from": "SW2",
+      "to": "R5",
+      "from_port": "Ethernet0/2",
+      "to_port": "Ethernet0/0",
+      "status": "up",
+      "method": "eveng"
+    },
+    {
+      "from": "R6",
+      "to": "SW2",
+      "from_port": "Ethernet0/0",
+      "to_port": "Ethernet0/3",
+      "status": "up",
+      "method": "eveng"
     },
     {
       "from": "Linux",
