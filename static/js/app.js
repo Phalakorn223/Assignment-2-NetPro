@@ -201,7 +201,7 @@ function startAutoReconnectLoop() {
                 }
             }
         } catch (e) {}
-    }, 15000);
+    }, 30000);
 }
 
 async function loadInventory() {
@@ -252,7 +252,7 @@ function renderInventoryList() {
 }
 
 function populateDeviceSelects() {
-    const selects = ["active-device-select", "conn-device-select"];
+    const selects = ["active-device-select", "conn-device-select", "cli-device-select"];
     selects.forEach(sid => {
         const sel = document.getElementById(sid);
         if (!sel) return;
@@ -269,9 +269,97 @@ function populateDeviceSelects() {
     updatePromptLabel();
 }
 
+function switchCliDevice(devId) {
+    if (!devId || devId === activeDeviceId) return;
+    saveCurrentDeviceTerminalState();
+    selectActiveDevice(devId);
+    restoreDeviceTerminalState(devId);
+    updatePromptLabel();
+    const cliSel = document.getElementById("cli-device-select");
+    if (cliSel) cliSel.value = devId;
+    focusCliInput();
+}
+
+async function sendQuickCommand(cmd) {
+    if (!activeDeviceId) {
+        showNotification("กรุณาเลือกอุปกรณ์ก่อนส่งคำสั่ง", "warning");
+        return;
+    }
+    const input = document.getElementById("cli-input");
+    if (input) input.value = cmd;
+    await sendConsoleCmd();
+}
+
+function openBatchScriptModal(e) {
+    if (e) e.stopPropagation();
+    const targetEl = document.getElementById("batch-target-device");
+    if (targetEl) targetEl.textContent = getCliHostname();
+    const prog = document.getElementById("batch-progress");
+    if (prog) prog.classList.add("d-none");
+    const btn = document.getElementById("btn-run-batch");
+    if (btn) btn.disabled = false;
+    openModal("batch-script-modal");
+}
+
+function insertBatchPreset(type) {
+    const txt = document.getElementById("batch-script-text");
+    if (!txt) return;
+    if (type === "ospf") {
+        txt.value = `router ospf 1\n router-id 1.1.1.1\n network 192.168.1.0 0.0.0.255 area 0\n network 10.0.0.0 0.0.0.3 area 0\nexit`;
+    } else if (type === "rip") {
+        txt.value = `router rip\n version 2\n no auto-summary\n network 192.168.1.0\n network 10.0.0.0\nexit`;
+    } else if (type === "int") {
+        txt.value = `interface GigabitEthernet0/0\n ip address 192.168.1.1 255.255.255.0\n no shutdown\nexit`;
+    }
+}
+
+async function executeBatchScript() {
+    const txt = document.getElementById("batch-script-text");
+    const script = (txt?.value || "").trim();
+    if (!script) {
+        showNotification("กรุณาระบุคำสั่งในสคริปต์", "warning");
+        return;
+    }
+    const prog = document.getElementById("batch-progress");
+    const progText = document.getElementById("batch-progress-text");
+    const btn = document.getElementById("btn-run-batch");
+    if (prog) prog.classList.remove("d-none");
+    if (btn) btn.disabled = true;
+
+    const lines = script.split(/\r?\n/);
+    const validLines = lines.map(l => l.trim()).filter(l => l && !l.startsWith("!"));
+
+    closeModal("batch-script-modal");
+    switchTab("tab-cli");
+    appendCliLine(`\n--- [Batch Script Started: ${validLines.length} commands to ${activeDeviceId}] ---`);
+
+    for (let i = 0; i < validLines.length; i++) {
+        const cmd = validLines[i];
+        if (progText) progText.textContent = `(${i + 1}/${validLines.length}) ${cmd}`;
+        const prompt = document.getElementById("cli-prompt")?.textContent || "R1# ";
+        appendCliLine(`${prompt}${cmd}`);
+        try {
+            const res = await fetch("/api/cli/execute", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ device_id: activeDeviceId, command: cmd })
+            });
+            const data = await res.json();
+            if (data.output) appendCliOutput(data.output);
+            if (data.prompt) setCliDirectPrompt(data.prompt);
+        } catch (e) {
+            appendCliOutput(`% Error: ${e.message}`);
+        }
+    }
+    appendCliLine(`--- [Batch Script Completed] ---\n`);
+    scrollToBottom();
+    focusCliInput();
+}
+
 // Terminal Emulator multi-session state store (per device buffer)
 const deviceTerminalState = {};
 let cliIsPasswordMode = false;
+
 
 function saveCurrentDeviceTerminalState() {
     if (!activeDeviceId) return;
@@ -403,6 +491,22 @@ let cliDirectPrompt = "";
 function setCliDirectPrompt(prompt) {
     if (!prompt) return;
     cliDirectPrompt = prompt.trim();
+
+    // ปรับเปลี่ยนโหมด CLI อัตโนมัติตาม Prompt จริงของอุปกรณ์
+    if (cliDirectPrompt.includes("(config-router)")) {
+        cliMode = "config_router";
+    } else if (cliDirectPrompt.includes("(config-if)")) {
+        cliMode = "config_if";
+    } else if (cliDirectPrompt.includes("(config-line)")) {
+        cliMode = "config_line";
+    } else if (cliDirectPrompt.includes("(config)")) {
+        cliMode = "config";
+    } else if (cliDirectPrompt.endsWith(">")) {
+        cliMode = "user";
+    } else if (cliDirectPrompt.endsWith("#") || cliDirectPrompt.endsWith("$")) {
+        cliMode = "exec";
+    }
+
     const promptEl = document.getElementById("cli-prompt");
     if (promptEl) promptEl.textContent = getCliPrompt();
 
@@ -482,43 +586,154 @@ function toggleInventoryPanel() {
     if (list) list.classList.toggle("d-none");
 }
 
-function openAddDeviceModal() { document.getElementById("add-device-modal").classList.add("active"); }
+function openAddDeviceModal() {
+    document.getElementById("add-device-modal").classList.add("active");
+    const nameErr = document.getElementById("ad-name-err");
+    const ipErr = document.getElementById("ad-ip-err");
+    const serialErr = document.getElementById("ad-serial-err");
+    if (nameErr) nameErr.classList.add("d-none");
+    if (ipErr) ipErr.classList.add("d-none");
+    if (serialErr) serialErr.classList.add("d-none");
+}
+
+function validateAddDeviceFormLive() {
+    const nameInput = document.getElementById("ad-name");
+    const nameErr = document.getElementById("ad-name-err");
+    const ipInput = document.getElementById("ad-ip");
+    const portInput = document.getElementById("ad-port");
+    const ipErr = document.getElementById("ad-ip-err");
+    const serialInput = document.getElementById("ad-serial-port");
+    const serialErr = document.getElementById("ad-serial-err");
+    const proto = document.getElementById("ad-proto")?.value || "SSH";
+    const dtype = document.getElementById("ad-type")?.value || "router";
+
+    let hasError = false;
+
+    // 1. ตรวจสอบชื่อซ้ำ (Case-insensitive)
+    const rawName = (nameInput?.value || "").trim();
+    if (rawName && Array.isArray(inventoryDevices)) {
+        const dup = inventoryDevices.find(d => (d.name || d.id || "").toLowerCase() === rawName.toLowerCase());
+        if (dup) {
+            if (nameErr) {
+                nameErr.textContent = `⚠️ ชื่อ '${rawName}' มีอยู่แล้วในระบบ (ห้ามใช้ชื่อซ้ำ)`;
+                nameErr.classList.remove("d-none");
+            }
+            hasError = true;
+        } else {
+            if (nameErr) {
+                nameErr.classList.add("d-none");
+                nameErr.textContent = "";
+            }
+        }
+    } else {
+        if (nameErr) nameErr.classList.add("d-none");
+    }
+
+    // 2. ตรวจสอบ Socket Collision (IP + Port ซ้ำกัน)
+    if (proto !== "SERIAL" && dtype !== "network" && Array.isArray(inventoryDevices)) {
+        const rawIp = (ipInput?.value || "").trim();
+        const rawPort = parseInt(portInput?.value) || (proto === "TELNET" ? 23 : 22);
+        if (rawIp) {
+            const dupSock = inventoryDevices.find(d => {
+                if ((d.connection_type || "").toUpperCase() === "SERIAL") return false;
+                const dIp = (d.ip || "").trim();
+                const dPort = parseInt(d.port) || ((d.connection_type || "").toUpperCase() === "TELNET" ? 23 : 22);
+                return dIp === rawIp && dPort === rawPort;
+            });
+            if (dupSock) {
+                if (ipErr) {
+                    ipErr.textContent = `⚠️ IP '${rawIp}' พอร์ต '${rawPort}' ชนกับ '${dupSock.name || dupSock.id}' ในระบบ`;
+                    ipErr.classList.remove("d-none");
+                }
+                hasError = true;
+            } else {
+                if (ipErr) {
+                    ipErr.classList.add("d-none");
+                    ipErr.textContent = "";
+                }
+            }
+        } else {
+            if (ipErr) ipErr.classList.add("d-none");
+        }
+    } else {
+        if (ipErr) ipErr.classList.add("d-none");
+    }
+
+    // 3. ตรวจสอบ Serial COM Port ซ้ำ
+    if (proto === "SERIAL" && Array.isArray(inventoryDevices)) {
+        const rawSerial = (serialInput?.value || "").trim().toUpperCase();
+        if (rawSerial) {
+            const dupSer = inventoryDevices.find(d => {
+                return (d.connection_type || "").toUpperCase() === "SERIAL" && (d.serial_port || "").trim().toUpperCase() === rawSerial;
+            });
+            if (dupSer) {
+                if (serialErr) {
+                    serialErr.textContent = `⚠️ Serial Port '${rawSerial}' ถูกใช้งานโดย '${dupSer.name || dupSer.id}' แล้ว`;
+                    serialErr.classList.remove("d-none");
+                }
+                hasError = true;
+            } else {
+                if (serialErr) {
+                    serialErr.classList.add("d-none");
+                    serialErr.textContent = "";
+                }
+            }
+        } else {
+            if (serialErr) serialErr.classList.add("d-none");
+        }
+    } else {
+        if (serialErr) serialErr.classList.add("d-none");
+    }
+
+    return !hasError;
+}
 
 async function submitAddDevice(e) {
     e.preventDefault();
+    if (!validateAddDeviceFormLive()) {
+        showNotification("ข้อมูลอุปกรณ์ซ้ำกับเครื่องอื่นใน Inventory กรุณาตรวจสอบชื่อหรือ IP:Port", "error");
+        return;
+    }
+
     const dtype = document.getElementById("ad-type").value;
     const proto = document.getElementById("ad-proto").value || (dtype === "pc" ? "SSH" : "TELNET");
     const isSerial = proto === "SERIAL";
 
     const payload = {
-        name: document.getElementById("ad-name").value,
+        name: (document.getElementById("ad-name").value || "").trim(),
         model: document.getElementById("ad-model").value,
         device_type_label: dtype,
         connection_type: proto,
-        ip: isSerial ? "" : document.getElementById("ad-ip").value,
+        ip: isSerial ? "" : (document.getElementById("ad-ip").value || "").trim(),
         port: isSerial ? 0 : (parseInt(document.getElementById("ad-port").value) || (proto === "TELNET" ? 23 : 22)),
-        serial_port: isSerial ? (document.getElementById("ad-serial-port")?.value || "COM1") : undefined,
+        serial_port: isSerial ? (document.getElementById("ad-serial-port")?.value || "COM1").trim().toUpperCase() : undefined,
         baudrate: isSerial ? (parseInt(document.getElementById("ad-baud")?.value) || 9600) : undefined,
         username: isSerial ? "" : document.getElementById("ad-user").value,
         password: isSerial ? "" : document.getElementById("ad-pass").value,
+        secret: (document.getElementById("ad-secret")?.value || "").trim() || "cisco",
         mask: document.getElementById("ad-mask")?.value || "255.255.255.0",
         gateway: document.getElementById("ad-gateway")?.value || "",
     };
-    const res = await fetch("/api/inventory", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload)
-    });
-    const data = await res.json();
-    if (data.success) {
-        closeModal("add-device-modal");
-        document.getElementById("add-device-form").reset();
-        onAddDeviceProtoChange();
-        await loadInventory();
-        showNotification(`Added device: ${payload.name}`, "success");
-    } else {
-        showNotification(data.message, "error");
+    try {
+        const res = await fetch("/api/inventory", {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload)
+        });
+        const data = await res.json();
+        if (data.success) {
+            closeModal("add-device-modal");
+            document.getElementById("add-device-form").reset();
+            onAddDeviceProtoChange();
+            await loadInventory();
+            showNotification(`Added device: ${payload.name}`, "success");
+        } else {
+            showNotification(data.message || (data.errors ? data.errors[0] : "เกิดข้อผิดพลาด"), "error");
+        }
+    } catch (err) {
+        showNotification(`Network error: ${err.message}`, "error");
     }
 }
+
 
 async function deleteDevice(deviceId) {
     if (!confirm(`Remove ${deviceId} from inventory?`)) return;
@@ -532,6 +747,32 @@ async function deleteDevice(deviceId) {
         showNotification(`Removed ${deviceId}`, "success");
     } else {
         showNotification(data.message || "ลบ device ไม่สำเร็จ", "error");
+    }
+}
+
+async function deleteAllDevices() {
+    if (!confirm("คุณแน่ใจหรือไม่ว่าต้องการลบอุปกรณ์ทั้งหมดใน Inventory? (การเชื่อมต่อทั้งหมดจะถูกปิด)")) return;
+    try {
+        const res = await fetch("/api/inventory", { method: "DELETE" });
+        const data = await res.json();
+        if (data.success) {
+            inventoryDevices = [];
+            activeDeviceId = "";
+            renderInventoryList();
+            populateDeviceSelects();
+            renderVisNetwork([], []);
+            const nodeBadge = document.getElementById("node-count-badge");
+            const edgeBadge = document.getElementById("edge-count-badge");
+            if (nodeBadge) nodeBadge.textContent = "0 Devices";
+            if (edgeBadge) edgeBadge.textContent = "0 Links";
+            refreshInterfaceTable();
+            clearConsole();
+            showNotification("ลบอุปกรณ์ทั้งหมดออกจาก Inventory เรียบร้อยแล้ว", "success");
+        } else {
+            showNotification(data.message || "ไม่สามารถลบอุปกรณ์ทั้งหมดได้", "error");
+        }
+    } catch (e) {
+        showNotification(`เกิดข้อผิดพลาดในการลบอุปกรณ์: ${e.message}`, "error");
     }
 }
 
@@ -559,7 +800,7 @@ async function onAddDeviceProtoChange() {
 
     if (ipPortRow) ipPortRow.classList.toggle("d-none", isSerial);
     if (serialRow) serialRow.classList.toggle("d-none", !isSerial);
-    if (credFields) credFields.classList.toggle("d-none", isSerial);
+    // ไม่ซ่อน credFields เพื่อให้ผู้ใช้สามารถใส่ Enable Secret สำหรับสาย Console ได้ด้วย
 
     if (isSerial) {
         if (hintEl) hintEl.innerHTML = `<span style="color:#38bdf8"><i class="fa-solid fa-plug"></i> Serial Console</span>: ใช้ COM Port เช่น COM1, COM7 กับ Baud Rate 9600 (ไม่ต้องระบุ IP Address)<br><span style="color:#fbbf24"><i class="fa-solid fa-triangle-exclamation"></i> <strong>ข้อควรระวัง:</strong> หากเป็น Console บน EVE-NG (เช่น พอร์ต 32769) ให้เลือก Protocol เป็น <strong>Telnet</strong></span>`;
@@ -963,6 +1204,18 @@ function renderVisNetwork(nodes, edges) {
     const container = document.getElementById("topology-container");
     if (!container || typeof vis === "undefined") return;
 
+    if (!nodes || nodes.length === 0) {
+        if (topoNetwork) { topoNetwork.destroy(); topoNetwork = null; }
+        const loading = document.getElementById("topo-loading");
+        container.innerHTML = '<div class="topo-empty-state" style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;color:var(--text-dim);font-size:13px;gap:8px;"><i class="fa-solid fa-diagram-project" style="font-size:32px;opacity:0.35"></i><span>ยังไม่มีอุปกรณ์ใน Topology (กด "Add Device" เพื่อเพิ่มอุปกรณ์)</span></div>';
+        if (loading) container.appendChild(loading);
+        const nodeBadge = document.getElementById("node-count-badge");
+        const edgeBadge = document.getElementById("edge-count-badge");
+        if (nodeBadge) nodeBadge.textContent = "0 Devices";
+        if (edgeBadge) edgeBadge.textContent = "0 Links";
+        return;
+    }
+
     const nodeColor = (type) => {
         if (type === "router") return { background: "#1e3a5f", border: "#3b82f6", highlight: { background: "#2563eb", border: "#60a5fa" } };
         if (type === "switch") return { background: "#1a3a2a", border: "#10b981", highlight: { background: "#059669", border: "#34d399" } };
@@ -970,7 +1223,10 @@ function renderVisNetwork(nodes, edges) {
         return { background: "#2d1a3a", border: "#a855f7", highlight: { background: "#7c3aed", border: "#c084fc" } };
     };
 
-    const visNodes = new vis.DataSet(nodes.map(n => {
+    const nodeMap = {};
+    (nodes || []).forEach(n => { nodeMap[n.id] = n; });
+
+    const visNodes = new vis.DataSet((nodes || []).map(n => {
         const isNet = (n.type === "network" || n.type === "cloud");
         const nodeObj = {
             id: n.id,
@@ -980,6 +1236,7 @@ function renderVisNetwork(nodes, edges) {
             font: { color: "#f8fafc", size: isNet ? 11 : 12, face: "Inter" },
             borderWidth: n.id === activeDeviceId ? 3 : 1.5,
             shadow: { enabled: true, color: "rgba(0,0,0,0.5)", size: 8 },
+            title: `Device: ${n.name} (${n.id})\nType: ${n.type}\nIP: ${n.ip || 'N/A'}\nModel: ${n.model || 'N/A'}\nStatus: ${n.status || 'unknown'}`
         };
         if (isNet) {
             nodeObj.margin = 12;
@@ -996,29 +1253,42 @@ function renderVisNetwork(nodes, edges) {
                 .replace("Serial", "Se");
     };
 
-    const visEdges = new vis.DataSet(edges.map((e, idx) => {
-        let label = "";
-        let fromPart = formatPort(e.from_port);
-        let toPart = formatPort(e.to_port);
+    const visEdges = new vis.DataSet((edges || []).map((e, idx) => {
+        const fromName = nodeMap[e.from]?.name || e.from;
+        const toName = nodeMap[e.to]?.name || e.to;
+        const fromPart = formatPort(e.from_port);
+        const toPart = formatPort(e.to_port);
 
+        let label = "";
         if (fromPart && toPart) {
-            // Direct router-to-router link: e.g. e0/1 ↔ e0/1
-            label = `${fromPart} ↔ ${toPart}`;
+            // Direct router-to-router link: แสดงชื่อ Router และ IP ของแต่ละฝั่งให้ชัดเจน ไม่สับสน
             if (e.from_ip && e.to_ip) {
-                label += `\n${e.from_ip} ↔ ${e.to_ip}`;
+                label = `${fromName} [${fromPart}]: ${e.from_ip}\n↕\n${toName} [${toPart}]: ${e.to_ip}`;
+            } else if (e.from_ip) {
+                label = `${fromName} [${fromPart}]: ${e.from_ip}\n↕\n${toName} [${toPart}]`;
+            } else if (e.to_ip) {
+                label = `${fromName} [${fromPart}]\n↕\n${toName} [${toPart}]: ${e.to_ip}`;
+            } else {
+                label = `${fromName} [${fromPart}] ⟷ ${toName} [${toPart}]`;
             }
         } else if (fromPart) {
-            // Router-to-Network link: e.g. e0/0
-            label = fromPart;
-            if (e.from_ip) {
-                label += ` (${e.from_ip})`;
-            }
+            // Router-to-Network link
+            const ipStr = e.from_ip ? ` (${e.from_ip})` : '';
+            label = `${fromName} [${fromPart}]${ipStr}\n⟷\n${toName}`;
+        } else {
+            label = `${fromName} ⟷ ${toName}`;
         }
 
         // Tooltip title
-        let title = `${e.from} ↔ ${e.to}`;
-        if (e.subnet) title += `\nSubnet: ${e.subnet}`;
-        if (e.method) title += `\nDiscovery: ${e.method}`;
+        let title = `Link: ${fromName} ↔ ${toName}`;
+        if (fromPart || e.from_ip) {
+            title += `\n • ${fromName}: ${fromPart || 'port'}${e.from_ip ? ' (IP: ' + e.from_ip + ')' : ''}`;
+        }
+        if (toPart || e.to_ip) {
+            title += `\n • ${toName}: ${toPart || 'port'}${e.to_ip ? ' (IP: ' + e.to_ip + ')' : ''}`;
+        }
+        if (e.subnet) title += `\n • Subnet: ${e.subnet}`;
+        if (e.method) title += `\n • Discovery: ${e.method}`;
         return {
             id: `edge_${e.from}_${e.to}_${idx}`,
             from: e.from, to: e.to,
@@ -2051,11 +2321,51 @@ function copyConsoleOutput(e) {
     });
 }
 
-function handleTabAutocomplete() {
+let cliIsMoreMode = false;
+
+async function sendMorePaging(key = " ") {
+    const input = document.getElementById("cli-input");
+    if (input) input.value = "";
+    try {
+        const res = await fetch("/api/cli/execute", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                device_id: activeDeviceId,
+                command: key
+            })
+        });
+        const data = await res.json();
+        if (data.output) {
+            appendCliOutput(data.output);
+        }
+        if (data.is_more || (data.prompt && data.prompt === "--More--")) {
+            cliIsMoreMode = true;
+            const promptEl = document.getElementById("cli-prompt");
+            if (promptEl) promptEl.textContent = "--More-- (Space=Next Page, Enter=Line, q=Quit) ";
+        } else {
+            cliIsMoreMode = false;
+            if (data.prompt) {
+                setCliDirectPrompt(data.prompt);
+            } else {
+                updatePromptLabel();
+            }
+        }
+    } catch (err) {
+        cliIsMoreMode = false;
+        appendCliOutput(`% Communication error: ${err.message}`);
+        updatePromptLabel();
+    }
+    scrollToBottom();
+    focusCliInput();
+}
+
+async function handleTabAutocomplete() {
     const input = document.getElementById("cli-input");
     if (!input) return;
-    const val = input.value.trim();
-    if (!val) return;
+    const val = input.value;
+    const trimmed = val.trim();
+    if (!trimmed) return;
 
     if (isCurrentDeviceLinux()) {
         const linuxAlias = {
@@ -2068,11 +2378,11 @@ function handleTabAutocomplete() {
             "sys": "systemctl status ssh",
             "cat os": "cat /etc/os-release"
         };
-        if (linuxAlias[val.toLowerCase()]) {
-            input.value = linuxAlias[val.toLowerCase()];
+        if (linuxAlias[trimmed.toLowerCase()]) {
+            input.value = linuxAlias[trimmed.toLowerCase()];
             return;
         }
-        const matches = LINUX_HELP_DATABASE.commands.filter(c => c.cmd.toLowerCase().startsWith(val.toLowerCase()));
+        const matches = LINUX_HELP_DATABASE.commands.filter(c => c.cmd.toLowerCase().startsWith(trimmed.toLowerCase()));
         if (matches.length === 1) {
             input.value = matches[0].cmd + " ";
             return;
@@ -2084,33 +2394,143 @@ function handleTabAutocomplete() {
         "sh ip": "show ip ",
         "sh ip int": "show ip interface ",
         "sh ip int br": "show ip interface brief",
+        "sh ip int brief": "show ip interface brief",
         "sh run": "show running-config",
+        "sh start": "show startup-config",
         "sh ver": "show version",
         "sh ip ro": "show ip route",
+        "sh ip route": "show ip route",
+        "sh ip proto": "show ip protocols",
+        "sh cont": "show controllers",
+        "sh contr": "show controllers",
+        "sh controllers": "show controllers",
+        "show cont": "show controllers",
         "conf": "configure terminal",
         "conf t": "configure terminal",
+        "config": "configure terminal",
+        "config t": "configure terminal",
+        "config router": "router ",
+        "config router rip": "router rip",
+        "router r": "router rip",
+        "router ri": "router rip",
+        "router rip": "router rip",
+        "router o": "router ospf 1",
+        "router os": "router ospf 1",
+        "router ospf": "router ospf 1",
+        "router e": "router eigrp 100",
+        "router ei": "router eigrp 100",
+        "router eigrp": "router eigrp 100",
+        "router b": "router bgp 65001",
+        "router bg": "router bgp 65001",
+        "router bgp": "router bgp 65001",
         "int": "interface ",
         "no sh": "no shutdown",
+        "no shut": "no shutdown",
+        "no au": "no auto-summary",
+        "no auto": "no auto-summary",
         "ip add": "ip address ",
         "wr": "write memory",
-        "wr mem": "write memory"
+        "wr mem": "write memory",
+        "net": "network ",
+        "ver": "version 2",
+        "pass": "passive-interface "
     };
 
-    if (aliasMap[val.toLowerCase()]) {
-        input.value = aliasMap[val.toLowerCase()];
+    const lowerTrim = trimmed.toLowerCase();
+    if (aliasMap[lowerTrim]) {
+        input.value = aliasMap[lowerTrim];
         return;
     }
 
     const mData = CISCO_HELP_DATABASE[cliMode] || CISCO_HELP_DATABASE.exec;
-    const matches = mData.commands.filter(c => c.cmd.toLowerCase().startsWith(val.toLowerCase()));
+
+    // ตรวจสอบ subcommands ตาม prefix เช่น "router r" -> "router rip "
+    const words = trimmed.split(/\s+/);
+    if (words.length > 1) {
+        const prefix = words.slice(0, -1).join(" ").toLowerCase();
+        const lastWord = words[words.length - 1].toLowerCase();
+        
+        let subList = (mData.sub && mData.sub[prefix]) ? mData.sub[prefix] : null;
+        if (!subList && mData.sub) {
+            for (const [k, v] of Object.entries(mData.sub)) {
+                if (k.toLowerCase() === prefix || aliasMap[prefix] === k) {
+                    subList = v;
+                    break;
+                }
+            }
+        }
+        if (subList) {
+            const subMatches = subList.filter(s => s.cmd.toLowerCase().startsWith(lastWord) && s.cmd !== "<cr>" && !s.cmd.startsWith("<"));
+            if (subMatches.length === 1) {
+                words[words.length - 1] = subMatches[0].cmd;
+                input.value = words.join(" ") + " ";
+                return;
+            } else if (subMatches.length > 1) {
+                const prompt = getCliPrompt();
+                appendCliLine(`${prompt}${input.value}`);
+                appendCliOutput(subMatches.map(m => m.cmd).join("  "));
+                return;
+            }
+        }
+    }
+
+    // Single-word match ใน mData.commands
+    const matches = mData.commands.filter(c => c.cmd.toLowerCase().startsWith(lowerTrim));
     if (matches.length === 1) {
         input.value = matches[0].cmd + " ";
+        return;
+    } else if (matches.length > 1) {
+        const prompt = getCliPrompt();
+        appendCliLine(`${prompt}${input.value}`);
+        appendCliOutput(matches.map(m => m.cmd).join("  "));
+        return;
     }
+
+    // Subcommands matching whole string (เช่น "router" กด Tab -> แสดง rip, ospf, eigrp, bgp)
+    if (mData.sub && mData.sub[lowerTrim]) {
+        const prompt = getCliPrompt();
+        appendCliLine(`${prompt}${input.value}`);
+        appendCliOutput(mData.sub[lowerTrim].map(m => m.cmd).join("  "));
+        return;
+    }
+
+    // Fallback: ดึง suggestions จาก backend API
+    try {
+        const res = await fetch(`/api/suggestions?q=${encodeURIComponent(trimmed)}`);
+        const d = await res.json();
+        if (d.success && d.suggestions && d.suggestions.length) {
+            if (d.suggestions.length === 1) {
+                input.value = d.suggestions[0] + " ";
+            } else {
+                const prompt = getCliPrompt();
+                appendCliLine(`${prompt}${input.value}`);
+                appendCliOutput(d.suggestions.slice(0, 8).join("  "));
+            }
+        }
+    } catch (_) {}
 }
 
 function handleCliKey(e) {
     const input = document.getElementById("cli-input");
     if (!input) return;
+
+    if (cliIsMoreMode) {
+        if (e.key === " ") {
+            e.preventDefault();
+            sendMorePaging(" ");
+            return;
+        }
+        if (e.key === "Enter") {
+            e.preventDefault();
+            sendMorePaging("\r");
+            return;
+        }
+        if (e.key.toLowerCase() === "q" || (e.key === "c" && e.ctrlKey)) {
+            e.preventDefault();
+            sendMorePaging("\x03");
+            return;
+        }
+    }
 
     if (e.key === "?" && !cliIsPasswordMode) {
         e.preventDefault();
@@ -2238,6 +2658,11 @@ async function sendConsoleCmd() {
         return;
     }
 
+    // แสดงสถานะ Spinner และล็อก Input ชั่วคราวเพื่อป้องกันการกด Enter ซ้ำ
+    const spinner = document.getElementById("cli-spinner");
+    if (spinner) spinner.classList.remove("d-none");
+    input.disabled = true;
+
     // ส่งคำสั่งไปยังเซสชันจริงของ Router/Switch
     try {
         const res = await fetch("/api/cli/execute", {
@@ -2254,8 +2679,15 @@ async function sendConsoleCmd() {
         } else if (data.message && !data.success) {
             appendCliOutput(`% ${data.message}`);
         }
-        if (data.prompt) {
-            setCliDirectPrompt(data.prompt);
+        if (data.is_more || (data.prompt && data.prompt === "--More--")) {
+            cliIsMoreMode = true;
+            const promptEl = document.getElementById("cli-prompt");
+            if (promptEl) promptEl.textContent = "--More-- (Space=Next Page, Enter=Line, q=Quit) ";
+        } else {
+            cliIsMoreMode = false;
+            if (data.prompt) {
+                setCliDirectPrompt(data.prompt);
+            }
         }
 
         // จัดการสถานะ Password mode
@@ -2272,14 +2704,34 @@ async function sendConsoleCmd() {
         }
     } catch (err) {
         appendCliOutput(`% Communication error: ${err.message}`);
+    } finally {
+        if (spinner) spinner.classList.add("d-none");
+        input.disabled = false;
+        scrollToBottom();
+        focusCliInput();
     }
-
-    scrollToBottom();
-    focusCliInput();
 }
+
+// ดักจับการ Paste ข้อความหลายบรรทัดลงในช่อง CLI Input เพื่อเปิด Batch Script Runner ทันที
+document.addEventListener("DOMContentLoaded", () => {
+    const cliIn = document.getElementById("cli-input");
+    if (cliIn) {
+        cliIn.addEventListener("paste", (e) => {
+            const pasteData = (e.clipboardData || window.clipboardData)?.getData("text");
+            if (pasteData && (pasteData.includes("\n") || pasteData.includes("\r"))) {
+                e.preventDefault();
+                const scriptBox = document.getElementById("batch-script-text");
+                if (scriptBox) scriptBox.value = pasteData;
+                openBatchScriptModal();
+            }
+        });
+    }
+});
+
 
 function clearConsole(e) {
     if (e) e.stopPropagation();
+    cliIsMoreMode = false;
     const lines = document.getElementById("cli-lines");
     if (lines) lines.innerHTML = "";
     const input = document.getElementById("cli-input");
@@ -2287,12 +2739,14 @@ function clearConsole(e) {
     if (deviceTerminalState[activeDeviceId]) {
         deviceTerminalState[activeDeviceId].html = "";
     }
+    updatePromptLabel();
     scrollToBottom();
     focusCliInput();
 }
 
 async function sendBreakSignal(e) {
     if (e) e.stopPropagation();
+    cliIsMoreMode = false;
     const prompt = getCliPrompt();
     const input = document.getElementById("cli-input");
     const currentVal = input ? input.value : "";
@@ -3151,13 +3605,6 @@ async function saveConfig() {
     }
 }
 
-// Background Keepalive: ป้องกัน Telnet session บน Switch / Router หลุดจาก idle timeout
-setInterval(() => {
-    fetch("/api/connections/keepalive", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ device_id: activeDeviceId })
-    }).catch(() => {});
-}, 45000);
+// (Keepalive is handled centrally by startAutoReconnectLoop every 30s)
 
 

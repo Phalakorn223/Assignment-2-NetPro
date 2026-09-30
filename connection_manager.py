@@ -9,6 +9,7 @@ import json
 import subprocess
 import socket
 import time
+import threading
 from typing import Dict, Any, Optional
 
 try:
@@ -172,6 +173,17 @@ class ConnectionManager:
 
     def __init__(self):
         self.pool: Dict[str, Any] = {}
+        self._device_locks: Dict[str, threading.Lock] = {}
+        self._pool_lock = threading.Lock()
+
+    def get_device_lock(self, device_id: str) -> threading.Lock:
+        """ดึง lock ประจำ device เพื่อป้องกัน race condition ชนกันระหว่าง CLI กับ Background Tasks"""
+        with self._pool_lock:
+            dev = get_device_by_id(device_id)
+            canonical_id = dev.get("id", device_id) if dev else device_id
+            if canonical_id not in self._device_locks:
+                self._device_locks[canonical_id] = threading.Lock()
+            return self._device_locks[canonical_id]
 
     def connect(self, device_id: str, device_params: dict, skip_ping: bool = False) -> dict:
         """
@@ -380,48 +392,61 @@ class ConnectionManager:
         conn_type = entry["type"]
         handler = entry["handler"]
 
-        try:
-            if conn_type in ("SSH", "TELNET"):
-                output = handler.send_command(command, use_textfsm=use_textfsm)
-                # ตรวจ IOS syntax error
-                if isinstance(output, str) and re.search(r"% Invalid input detected at", output):
-                    return {
-                        "success": False,
-                        "output": output,
-                        "error": "IOS ไม่รู้จักคำสั่ง — ตรวจสอบ syntax หรือ IOS version ของอุปกรณ์"
-                    }
-                return {"success": True, "output": output}
+        lock = self.get_device_lock(active_id)
+        with lock:
+            try:
+                if conn_type in ("SSH", "TELNET"):
+                    output = handler.send_command(command, use_textfsm=use_textfsm)
+                    # ตรวจ IOS syntax error (เช่น อยู่ใน config mode แล้วสั่ง show ธรรมดา)
+                    if isinstance(output, str) and re.search(r"% Invalid input detected at", output):
+                        # หากเป็นคำสั่ง show ให้ลองส่งด้วย 'do <command>' อัตโนมัติ (กรณี router ติดอยู่ใน config mode)
+                        cmd_clean = command.strip()
+                        if cmd_clean.lower().startswith("show ") and not cmd_clean.lower().startswith("do "):
+                            try:
+                                do_out = handler.send_command(f"do {cmd_clean}", use_textfsm=use_textfsm)
+                                if isinstance(do_out, str) and not re.search(r"% Invalid input detected at", do_out):
+                                    return {"success": True, "output": do_out}
+                            except Exception:
+                                pass
+                        return {
+                            "success": False,
+                            "output": output,
+                            "error": "IOS ไม่รู้จักคำสั่ง — ตรวจสอบ syntax หรือ IOS version ของอุปกรณ์"
+                        }
+                    return {"success": True, "output": output}
 
-            elif conn_type == "SERIAL":
-                ser = handler
-                ser.reset_input_buffer()
-                ser.write(f"{command.strip()}\r\n".encode("utf-8"))
-                # วนลูปอ่านจนกว่าจะเจอ prompt (# หรือ >) หรือ timeout 3.5 วินาที
-                start_time = time.time()
-                raw_bytes = bytearray()
-                timeout = 3.5
-                while time.time() - start_time < timeout:
-                    if ser.in_waiting > 0:
-                        chunk = ser.read(ser.in_waiting)
-                        raw_bytes.extend(chunk)
-                        decoded = raw_bytes.decode("utf-8", errors="ignore")
-                        lines = [l.strip() for l in decoded.splitlines() if l.strip()]
-                        if len(lines) >= 2 and any(re.search(r"^[A-Za-z0-9_\-\.\(\)]+[#>]\s*$", l) for l in lines[-2:]):
-                            break
-                    time.sleep(0.06)
-                output = raw_bytes.decode("utf-8", errors="ignore")
-                return {"success": True, "output": output}
+                elif conn_type == "SERIAL":
+                    ser = handler
+                    ser.reset_input_buffer()
+                    ser.write(f"{command.strip()}\r\n".encode("utf-8"))
+                    # วนลูปอ่านจนกว่าจะเจอ prompt (# หรือ >) หรือ timeout 3.5 วินาที
+                    start_time = time.time()
+                    raw_bytes = bytearray()
+                    timeout = 3.5
+                    while time.time() - start_time < timeout:
+                        if ser.in_waiting > 0:
+                            chunk = ser.read(ser.in_waiting)
+                            raw_bytes.extend(chunk)
+                            decoded = raw_bytes.decode("utf-8", errors="ignore")
+                            lines = [l.strip() for l in decoded.splitlines() if l.strip()]
+                            if len(lines) >= 2 and any(re.search(r"^[A-Za-z0-9_\-\.\(\)]+[#>]\s*$", l) for l in lines[-2:]):
+                                break
+                        time.sleep(0.06)
+                    output = raw_bytes.decode("utf-8", errors="ignore")
+                    return {"success": True, "output": output}
 
-        except Exception as e:
-            err_msg = str(e).lower()
-            if retry and any(term in err_msg for term in ("closed", "eof", "broken pipe", "connection reset", "socket", "timeout")):
-                print(f"[ConnectionManager] Connection dropped for {active_id} ({e}), reconnecting...")
-                self.disconnect(active_id)
-                if self._ensure_connection(active_id):
-                    return self.send_command(active_id, command, use_textfsm=use_textfsm, retry=False)
-            return {"success": False, "output": f"Error: {str(e)}"}
+            except Exception as e:
+                err_msg = str(e).lower()
+                # ตรวจสอบว่า Socket ขาดจริงหรือไม่ (ไม่รวม ReadTimeout / Pattern not detected เพราะ channel ยังไม่ตาย)
+                is_dead_socket = any(term in err_msg for term in ("closed", "eof", "broken pipe", "connection reset", "connection refused", "not a socket"))
+                if retry and is_dead_socket:
+                    print(f"[ConnectionManager] Connection dropped for {active_id} ({e}), reconnecting...")
+                    self.disconnect(active_id)
+                    if self._ensure_connection(active_id):
+                        return self.send_command(active_id, command, use_textfsm=use_textfsm, retry=False)
+                return {"success": False, "output": f"Error: {str(e)}"}
 
-        return {"success": False, "output": "Unknown connection type"}
+            return {"success": False, "output": "Unknown connection type"}
 
     def _read_interactive_channel(
         self,
@@ -498,134 +523,184 @@ class ConnectionManager:
         conn_type = entry["type"]
         handler = entry["handler"]
 
-        try:
-            cmd_str = (command or "").strip()
+        lock = self.get_device_lock(active_id)
+        with lock:
+            try:
+                cmd_str = (command or "").strip()
 
-            if conn_type in ("SSH", "TELNET"):
-                # ล้าง buffer ตกค้างก่อนส่งคำสั่ง เพื่อไม่ให้ข้อมูลเก่าปนกับคำสั่งใหม่ (ยกเว้นกำลังรอป้อน Password)
-                if not entry.get("is_password_pending"):
-                    try:
-                        handler.clear_buffer()
-                    except Exception:
-                        pass
+                if conn_type in ("SSH", "TELNET"):
+                    # ล้าง buffer ตกค้างก่อนส่งคำสั่ง เพื่อไม่ให้ข้อมูลเก่าปนกับคำสั่งใหม่ (ยกเว้นกำลังรอป้อน Password)
+                    if not entry.get("is_password_pending"):
+                        try:
+                            handler.clear_buffer()
+                        except Exception:
+                            pass
 
-                is_linux = entry.get("is_linux", False)
-                newline = "\n" 
+                    is_linux = entry.get("is_linux", False)
+                    # ใช้ newline ที่ถูกต้อง: SSH ใช้ \n (ป้องกัน Cisco IOS ได้รับ \r แล้วตามด้วย \n ซึ่งมองเป็น 2 Enters)
+                    if conn_type == "SSH":
+                        newline = "\n"
+                    elif conn_type == "TELNET":
+                        newline = getattr(handler, "RETURN", "\r\n" if not is_linux else "\n")
+                    else:
+                        newline = "\r"
 
-                # รองรับ Ctrl+C (Break/Interrupt signal)
-                if command in ("\x03", "^C"):
-                    handler.write_channel("\x03")
-                    raw = self._read_interactive_channel(handler, cmd_str="", is_linux=is_linux, timeout=2.0, idle_timeout=0.15)
-                elif not cmd_str:
-                    # ถ้าส่งว่างเพื่อดึง prompt สดจากอุปกรณ์
-                    handler.write_channel(newline)
-                    raw = self._read_interactive_channel(handler, cmd_str="", is_linux=is_linux, timeout=4.0, idle_timeout=0.15)
-                else:
-                    # ส่งคำสั่งจริงไปยัง Channel
-                    cmd_to_send = cmd_str
-                    # ป้องกัน Linux ping รันไม่รู้จบ ถ้าผู้ใช้ไม่ได้ใส่ -c หรือ -w
-                    if is_linux and cmd_str.startswith("ping ") and not ("-c" in cmd_str or "-w" in cmd_str):
-                        cmd_to_send = f"{cmd_str} -c 4"
 
-                    handler.write_channel(f"{cmd_to_send}{newline}")
-                    raw = self._read_interactive_channel(handler, cmd_str=cmd_to_send, is_linux=is_linux, timeout=25.0, idle_timeout=0.25)
+                    # รองรับ Ctrl+C (Break/Interrupt signal)
+                    if command in ("\x03", "^C"):
+                        handler.write_channel("\x03")
+                        raw = self._read_interactive_channel(handler, cmd_str="", is_linux=is_linux, timeout=2.0, idle_timeout=0.15)
+                    elif command == " ":
+                        # รองรับกด Spacebar เพื่ออ่านหน้าถัดไปในโหมด --More--
+                        handler.write_channel(" ")
+                        raw = self._read_interactive_channel(handler, cmd_str="", is_linux=is_linux, timeout=6.0, idle_timeout=0.15)
+                    elif not cmd_str:
+                        # ถ้าส่งว่างเพื่อดึง prompt สดจากอุปกรณ์
+                        handler.write_channel(newline)
+                        raw = self._read_interactive_channel(handler, cmd_str="", is_linux=is_linux, timeout=4.0, idle_timeout=0.15)
+                    else:
+                        # ส่งคำสั่งจริงไปยัง Channel
+                        cmd_to_send = cmd_str
+                        # ป้องกัน Linux ping รันไม่รู้จบ ถ้าผู้ใช้ไม่ได้ใส่ -c หรือ -w
+                        if is_linux and cmd_str.startswith("ping ") and not ("-c" in cmd_str or "-w" in cmd_str):
+                            cmd_to_send = f"{cmd_str} -c 4"
 
-                # จัดการ Paging กรณีอุปกรณ์ส่ง output ยาวและติด --More-- (ตาม Section 14 & 24 ของ network_cli_teraterm_putty_vibecoding.md)
-                max_pages = 30
-                pages = 0
-                while "--More--" in raw and pages < max_pages:
-                    handler.write_channel(" ")
-                    time.sleep(0.03)
-                    more_data = self._read_interactive_channel(handler, cmd_str="", is_linux=is_linux, timeout=4.0, idle_timeout=0.15)
-                    if not more_data:
-                        break
-                    raw += more_data
-                    pages += 1
+                        handler.write_channel(f"{cmd_to_send}{newline}")
+                        raw = self._read_interactive_channel(handler, cmd_str=cmd_to_send, is_linux=is_linux, timeout=25.0, idle_timeout=0.25)
 
-            elif conn_type == "SERIAL":
-                ser = handler
-                ser.reset_input_buffer()
-                if command in ("\x03", "^C"):
-                    ser.write(b"\x03")
-                else:
-                    cmd_to_send = f"{cmd_str}\r\n" if cmd_str else "\r\n"
-                    ser.write(cmd_to_send.encode("utf-8"))
-
-                start_time = time.time()
-                raw_bytes = bytearray()
-                timeout = 5.0
-                while time.time() - start_time < timeout:
-                    if ser.in_waiting > 0:
-                        chunk = ser.read(ser.in_waiting)
-                        raw_bytes.extend(chunk)
-                        decoded = raw_bytes.decode("utf-8", errors="ignore")
-                        lines = [l.strip() for l in decoded.splitlines() if l.strip()]
-                        if len(lines) >= 1 and (
-                            re.search(r"^[A-Za-z0-9_\-\.\(\)]+[#>]\s*$", lines[-1])
-                            or re.search(r"^[A-Za-z0-9_\-\.]+@[A-Za-z0-9_\-\.]+:[^#$]*[\$#]\s*$", lines[-1])
-                            or re.search(r"(\[sudo\]\s+)?password(\s+for\s+\S+)?:\s*$", lines[-1], re.I)
-                        ):
+                    # จัดการ Paging อัตโนมัติสำหรับ show controllers หรือคำสั่งยาว (ขยายให้ครอบคลุมจนจบ)
+                    max_pages = 250
+                    pages = 0
+                    while "--More--" in raw and pages < max_pages:
+                        handler.write_channel(" ")
+                        time.sleep(0.02)
+                        more_data = self._read_interactive_channel(handler, cmd_str="", is_linux=is_linux, timeout=4.0, idle_timeout=0.15)
+                        if not more_data:
                             break
-                    time.sleep(0.05)
-                raw = raw_bytes.decode("utf-8", errors="ignore")
-            else:
-                return {"success": False, "output": "Unknown connection type", "prompt": "", "is_password": False}
+                        raw += more_data
+                        pages += 1
 
-            # ลบ ANSI Escape Codes, Pager markers (--More--), และ backspaces
-            raw_no_more = re.sub(r'--More--|\x08+', '', raw)
-            raw_no_ansi = re.sub(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])', '', raw_no_more)
-            raw_clean = raw_no_ansi.replace("\r\r\n", "\n").replace("\r\n", "\n").replace("\r", "\n")
-            lines = raw_clean.split("\n")
+                elif conn_type == "SERIAL":
+                    ser = handler
+                    ser.reset_input_buffer()
+                    if command in ("\x03", "^C"):
+                        ser.write(b"\x03")
+                    elif command == " ":
+                        ser.write(b" ")
+                    else:
+                        # Serial console ใช้ \r (Carriage Return) เสมือนปุ่ม Enter ของจริง ไม่ใช้ \r\n ซึ่งจะเกิดเบิ้ล
+                        cmd_to_send = f"{cmd_str}\r" if cmd_str else "\r"
+                        ser.write(cmd_to_send.encode("utf-8"))
 
-            # ตัด echo ของ command ถ้ามีที่บรรทัดแรก
-            if cmd_str and lines and cmd_str in lines[0]:
-                lines = lines[1:]
+                    start_time = time.time()
+                    raw_bytes = bytearray()
+                    timeout = 10.0 if "sh" in cmd_str.lower() else 5.0
+                    last_recv = time.time()
+                    pages = 0
+                    max_pages = 250
+                    while time.time() - start_time < timeout:
+                        if ser.in_waiting > 0:
+                            chunk = ser.read(ser.in_waiting)
+                            raw_bytes.extend(chunk)
+                            last_recv = time.time()
+                            decoded = raw_bytes.decode("utf-8", errors="ignore")
+                            if "--More--" in decoded and pages < max_pages:
+                                ser.write(b" ")
+                                pages += 1
+                                time.sleep(0.05)
+                                continue
+                            lines = [l.strip() for l in decoded.splitlines() if l.strip()]
+                            if len(lines) >= 1 and (
+                                re.search(r"^[A-Za-z0-9_\-\.\(\)]+[#>]\s*$", lines[-1])
+                                or re.search(r"^[A-Za-z0-9_\-\.]+@[A-Za-z0-9_\-\.]+:[^#$]*[\$#]\s*$", lines[-1])
+                                or re.search(r"(\[sudo\]\s+)?password(\s+for\s+\S+)?:\s*$", lines[-1], re.I)
+                                or re.search(r"(\[confirm\]|\[yes/no\]|\[y/n\])", lines[-1], re.I)
+                            ):
+                                if not cmd_str or cmd_str not in lines[-1]:
+                                    break
+                        else:
+                            if raw_bytes and (time.time() - last_recv > 0.3):
+                                break
+                        time.sleep(0.03)
+                    raw = raw_bytes.decode("utf-8", errors="ignore")
+                else:
+                    return {"success": False, "output": "Unknown connection type", "prompt": "", "is_password": False, "is_more": False}
 
-            # ลบบรรทัดว่างต่อท้าย
-            while lines and not lines[-1].strip():
-                lines.pop()
+                is_more = False
+                if "--More--" in raw[-500:]:
+                    is_more = True
 
-            # สกัด prompt ตัวจริง ออกมาจากบรรทัดสุดท้าย (Section 16-19, 40-41)
-            prompt = ""
-            is_password = False
-            if lines:
-                last_line = lines[-1].strip()
-                # 1. ตรวจจับ Password prompt (เช่น Password:, password:, [sudo] password for user:)
-                if re.search(r"(\[sudo\]\s+)?password(\s+for\s+\S+)?:\s*$", last_line, re.I):
-                    prompt = lines.pop().strip()
-                    is_password = True
-                # 2. ตรวจจับ Interactive confirmation prompt ([confirm], [yes/no]:, [y/n], (yes/no):)
-                elif re.search(r"(\[confirm\]|\[yes/no\]|\[y/n\]|\(yes/no\)|Do you want to continue\?\s*\[Y/n\])", last_line, re.I):
-                    prompt = lines.pop().strip()
-                # 3. ตรวจจับ Linux Shell Prompt (เช่น ubuntu@ubuntu:~$ หรือ root@ubuntu:~# หรือ cisco@pc1:~$ หรือ dev@host:/var/log$)
-                elif re.search(r"^[A-Za-z0-9_\-\.]+@[A-Za-z0-9_\-\.]+:[^#$]*[\$#]\s*$", last_line):
-                    prompt = lines.pop().strip()
-                # 4. ตรวจจับ Cisco CLI Prompt ปกติ (เช่น R1#, R1>, R1(config)#, S1(config-if)#, Switch#)
-                elif re.search(r"^[A-Za-z0-9_\-\.\(\)]+[#>]\s*$", last_line):
-                    prompt = lines.pop().strip()
+                # ลบ ANSI Escape Codes, Pager markers (--More--), และ backspaces
+                raw_no_more = re.sub(r'--More--|\x08+', '', raw)
+                raw_no_ansi = re.sub(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])', '', raw_no_more)
+                raw_clean = raw_no_ansi.replace("\r\r\n", "\n").replace("\r\n", "\n").replace("\r", "\n")
+                lines = raw_clean.split("\n")
 
-            entry["is_password_pending"] = is_password
+                # ตัด echo ของ command ถ้ามีที่บรรทัดแรก
+                if cmd_str and lines and cmd_str in lines[0]:
+                    lines = lines[1:]
 
-            clean_output = "\n".join(lines).strip()
-            return {
-                "success": True,
-                "output": clean_output,
-                "prompt": prompt,
-                "is_password": is_password,
-                "raw": raw
-            }
+                prompt = "--More--" if is_more else ""
+                is_password = False
 
-        except Exception as e:
-            err_msg = str(e).lower()
-            if retry and any(term in err_msg for term in ("closed", "eof", "broken pipe", "connection reset", "socket", "timeout")):
-                print(f"[ConnectionManager] Interactive connection dropped for {active_id} ({e}), reconnecting...")
-                self.disconnect(active_id)
-                if self._ensure_connection(active_id):
-                    return self.send_interactive(active_id, command, retry=False)
+                cisco_prompt_re = re.compile(r"^[A-Za-z0-9_\-\.\(\)]+[#>]\s*$")
+                linux_prompt_re = re.compile(r"^[A-Za-z0-9_\-\.]+@[A-Za-z0-9_\-\.]+:[^#$]*[\$#]\s*$")
+                pwd_prompt_re = re.compile(r"(\[sudo\]\s+)?password(\s+for\s+\S+)?:\s*$", re.I)
+                confirm_prompt_re = re.compile(r"(\[confirm\]|\[yes/no\]|\[y/n\]|\(yes/no\)|Do you want to continue\?\s*\[Y/n\])", re.I)
 
-            if "PermissionError" in str(e) or "Access is denied" in str(e):
-                return {"success": False, "output": "พอร์ต Serial ถูกเปิดใช้งานโดยโปรแกรมอื่น (เช่น Tera Term) — กรุณาปิดโปรแกรมอื่นก่อน", "prompt": ""}
-            return {"success": False, "output": f"Error: {str(e)}", "prompt": ""}
+                # ดึง Prompt ตัวจริง และลบบรรทัดที่เป็น Prompt ซ้ำซ้อนรวมถึงบรรทัดว่างต่อท้ายทั้งหมด (แก้ปัญหา enter เบิ้ล)
+                while lines:
+                    last_line = lines[-1].strip()
+                    if not last_line:
+                        lines.pop()
+                        continue
+                    if pwd_prompt_re.search(last_line):
+                        p = lines.pop().strip()
+                        if not prompt or prompt == "--More--":
+                            prompt = p
+                        is_password = True
+                        continue
+                    if confirm_prompt_re.search(last_line):
+                        p = lines.pop().strip()
+                        if not prompt or prompt == "--More--":
+                            prompt = p
+                        continue
+                    if linux_prompt_re.search(last_line):
+                        p = lines.pop().strip()
+                        if not prompt or prompt == "--More--":
+                            prompt = p
+                        continue
+                    if cisco_prompt_re.search(last_line):
+                        p = lines.pop().strip()
+                        if not prompt or prompt == "--More--":
+                            prompt = p
+                        continue
+                    break
+
+                entry["is_password_pending"] = is_password
+
+                clean_output = "\n".join(lines).strip()
+                return {
+                    "success": True,
+                    "output": clean_output,
+                    "prompt": prompt,
+                    "is_password": is_password,
+                    "is_more": is_more,
+                    "raw": raw
+                }
+
+            except Exception as e:
+                err_msg = str(e).lower()
+                is_dead_socket = any(term in err_msg for term in ("closed", "eof", "broken pipe", "connection reset", "connection refused", "not a socket"))
+                if retry and is_dead_socket:
+                    print(f"[ConnectionManager] Interactive connection dropped for {active_id} ({e}), reconnecting...")
+                    self.disconnect(active_id)
+                    if self._ensure_connection(active_id):
+                        return self.send_interactive(active_id, command, retry=False)
+
+                if "PermissionError" in str(e) or "Access is denied" in str(e):
+                    return {"success": False, "output": "พอร์ต Serial ถูกเปิดใช้งานโดยโปรแกรมอื่น (เช่น Tera Term) — กรุณาปิดโปรแกรมอื่นก่อน", "prompt": ""}
+                return {"success": False, "output": f"Error: {str(e)}", "prompt": ""}
 
     def send_config(self, device_id: str, commands: list, retry: bool = True) -> dict:
         """
@@ -650,54 +725,57 @@ class ConnectionManager:
         conn_type = entry["type"]
         handler = entry["handler"]
 
-        try:
-            if conn_type in ("SSH", "TELNET"):
-                output = handler.send_config_set(commands)
-                # ตรวจ IOS syntax error
-                if re.search(r"% Invalid input detected at", output):
-                    return {
-                        "success": False,
-                        "output": output,
-                        "error": "IOS ตรวจพบ syntax error ในคำสั่ง — ตรวจสอบ command ที่ส่งไป",
-                        "message": "IOS ตรวจพบ syntax error ในคำสั่ง"
-                    }
-                return {"success": True, "output": output, "message": "ตั้งค่าสำเร็จ"}
+        lock = self.get_device_lock(active_id)
+        with lock:
+            try:
+                if conn_type in ("SSH", "TELNET"):
+                    output = handler.send_config_set(commands)
+                    # ตรวจ IOS syntax error
+                    if re.search(r"% Invalid input detected at", output):
+                        return {
+                            "success": False,
+                            "output": output,
+                            "error": "IOS ตรวจพบ syntax error ในคำสั่ง — ตรวจสอบ command ที่ส่งไป",
+                            "message": "IOS ตรวจพบ syntax error ในคำสั่ง"
+                        }
+                    return {"success": True, "output": output, "message": "ตั้งค่าสำเร็จ"}
 
-            elif conn_type == "SERIAL":
-                ser = handler
-                ser.reset_input_buffer()
-                # ตรวจสอบและเข้า enable mode ถ้ายังอยู่ที่ prompt user mode (>)
-                ser.write(b"\r\n")
-                time.sleep(0.2)
-                p = ser.read_all().decode("utf-8", errors="ignore")
-                if ">" in p and "#" not in p:
-                    ser.write(b"enable\r\n")
-                    time.sleep(0.3)
+                elif conn_type == "SERIAL":
+                    ser = handler
+                    ser.reset_input_buffer()
+                    # ตรวจสอบและเข้า enable mode ถ้ายังอยู่ที่ prompt user mode (>)
+                    ser.write(b"\r\n")
+                    time.sleep(0.2)
+                    p = ser.read_all().decode("utf-8", errors="ignore")
+                    if ">" in p and "#" not in p:
+                        ser.write(b"enable\r\n")
+                        time.sleep(0.3)
+                        ser.read_all()
+
+                    ser.write(b"configure terminal\r\n")
+                    time.sleep(0.4)
                     ser.read_all()
-
-                ser.write(b"configure terminal\r\n")
-                time.sleep(0.4)
-                ser.read_all()
-                output_parts = []
-                for cmd in commands:
-                    ser.write(f"{cmd.strip()}\r\n".encode("utf-8"))
+                    output_parts = []
+                    for cmd in commands:
+                        ser.write(f"{cmd.strip()}\r\n".encode("utf-8"))
+                        time.sleep(0.3)
+                        output_parts.append(ser.read_all().decode("utf-8", errors="ignore"))
+                    ser.write(b"end\r\n")
                     time.sleep(0.3)
                     output_parts.append(ser.read_all().decode("utf-8", errors="ignore"))
-                ser.write(b"end\r\n")
-                time.sleep(0.3)
-                output_parts.append(ser.read_all().decode("utf-8", errors="ignore"))
-                return {"success": True, "output": "\n".join(output_parts), "message": "ตั้งค่าสำเร็จ"}
+                    return {"success": True, "output": "\n".join(output_parts), "message": "ตั้งค่าสำเร็จ"}
 
-        except Exception as e:
-            err_msg = str(e).lower()
-            if retry and any(term in err_msg for term in ("closed", "eof", "broken pipe", "connection reset", "socket", "timeout")):
-                print(f"[ConnectionManager] Connection dropped for {active_id} ({e}), reconnecting...")
-                self.disconnect(active_id)
-                if self._ensure_connection(active_id):
-                    return self.send_config(active_id, commands, retry=False)
-            return {"success": False, "output": f"Error: {str(e)}", "message": f"ส่งคำสั่งล้มเหลว: {str(e)}"}
+            except Exception as e:
+                err_msg = str(e).lower()
+                is_dead_socket = any(term in err_msg for term in ("closed", "eof", "broken pipe", "connection reset", "connection refused", "not a socket"))
+                if retry and is_dead_socket:
+                    print(f"[ConnectionManager] Connection dropped for {active_id} ({e}), reconnecting...")
+                    self.disconnect(active_id)
+                    if self._ensure_connection(active_id):
+                        return self.send_config(active_id, commands, retry=False)
+                return {"success": False, "output": f"Error: {str(e)}", "message": f"ส่งคำสั่งล้มเหลว: {str(e)}"}
 
-        return {"success": False, "output": "Unknown connection type", "message": "Unknown connection type"}
+            return {"success": False, "output": "Unknown connection type", "message": "Unknown connection type"}
 
     def disconnect(self, device_id: str) -> dict:
         """ปิด connection และลบออกจาก pool"""
@@ -799,16 +877,9 @@ class ConnectionManager:
                 # ข้าม keepalive ถ้ากำลังรอ Password หรือเป็น Linux SSH เพื่อไม่ให้ส่ง \x00 ปนใน buffer
                 if entry.get("is_password_pending") or entry.get("is_linux"):
                     continue
-                if conn_type in ("SSH", "TELNET") and hasattr(handler, "is_alive"):
-                    try:
-                        if not handler.is_alive():
-                            self.disconnect(tid)
-                            if auto_reconnect:
-                                self._ensure_connection(tid)
-                    except Exception:
-                        self.disconnect(tid)
-                        if auto_reconnect:
-                            self._ensure_connection(tid)
+                alive = self.is_connected(tid, check_alive=True)
+                if not alive and auto_reconnect:
+                    self._ensure_connection(tid)
             elif auto_reconnect and device_id:
                 self._ensure_connection(device_id)
 

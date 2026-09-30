@@ -38,10 +38,15 @@ COMMAND_ALIASES = {
     "show ver":             "show version",
     "sh vlan":              "show vlan",
     "sh int stat":          "show interfaces status",
+    "sh controllers":       "show controllers",
+    "sh controller":        "show controllers",
+    "sh cont":              "show controllers",
     # Routing protocols
+    "router r":     "router rip",
     "router osp":   "router ospf",
     "router ei":    "router eigrp",
-    "en":           "end",
+    "no auto":      "no auto-summary",
+    "en":           "enable",
     # BGP
     "sh ip bgp sum":        "show ip bgp summary",
     "show ip bgp sum":      "show ip bgp summary",
@@ -64,6 +69,7 @@ ALL_COMMANDS = [
     "show version",
     "show ip interface brief",
     "show interfaces status",
+    "show controllers",
     "show vlan",
     "show arp",
     # Show — Routing

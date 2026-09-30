@@ -90,6 +90,9 @@
                             <button class="btn-reconnect-all" id="btn-reconnect-all" onclick="event.stopPropagation(); triggerAutoConnectAll(true)" title="Auto-Reconnect All Inventory Devices">
                                 <i class="fa-solid fa-rotate-right"></i> Reconnect All
                             </button>
+                            <button class="btn btn-sm btn-outline text-danger" id="btn-delete-all-devices" onclick="event.stopPropagation(); deleteAllDevices()" title="ลบอุปกรณ์ทั้งหมดใน Inventory" style="color:#ef4444;border-color:#ef4444;">
+                                <i class="fa-solid fa-trash-can"></i> Delete All
+                            </button>
                             <button class="btn btn-sm btn-primary" onclick="event.stopPropagation(); openAddDeviceModal()">
                                 <i class="fa-solid fa-plus"></i> Add Device
                             </button>
@@ -504,15 +507,29 @@
                                     <span class="cisco-win-dot close" onclick="clearConsole(event)" title="Clear Console"></span>
                                     <span class="cisco-win-dot min"></span>
                                     <span class="cisco-win-dot max"></span>
-                                    <span class="cisco-titlebar-text" id="cli-window-title"><i class="fa-solid fa-terminal"></i> Console - R1</span>
+                                    <span class="cisco-titlebar-text" id="cli-window-title"><i class="fa-solid fa-terminal"></i> Console</span>
+                                    <select id="cli-device-select" class="cisco-titlebar-select" onchange="switchCliDevice(this.value)" title="Switch Active Device Terminal">
+                                    </select>
                                     <span class="badge badge-success" id="cli-conn-badge" style="margin-left:8px;font-size:11px;padding:2px 8px;border-radius:4px;letter-spacing:0.5px;">LIVE</span>
                                 </div>
                                 <div class="cisco-titlebar-actions">
+                                    <button type="button" class="cisco-btn-titlebar" onclick="openBatchScriptModal(event)" title="Paste & execute multi-line Cisco configuration script"><i class="fa-solid fa-file-code"></i> Batch Script</button>
                                     <button type="button" class="cisco-btn-titlebar" onclick="sendBreakSignal(event)" title="Send Break / Ctrl+C to device"><i class="fa-solid fa-ban"></i> Ctrl+C</button>
                                     <button type="button" class="cisco-btn-titlebar" onclick="reconnectActiveCli(event)" title="Reconnect Session"><i class="fa-solid fa-rotate-right"></i> Reconnect</button>
                                     <button type="button" class="cisco-btn-titlebar" onclick="clearConsole(event)" title="Clear screen"><i class="fa-solid fa-eraser"></i> Clear</button>
                                     <button type="button" class="cisco-btn-titlebar" onclick="copyConsoleOutput(event)" title="Copy terminal text"><i class="fa-regular fa-copy"></i> Copy</button>
                                 </div>
+                            </div>
+                            <div class="cisco-quick-bar" id="cli-quick-bar">
+                                <span class="cisco-quick-label"><i class="fa-solid fa-bolt"></i> Quick Actions:</span>
+                                <button type="button" class="cisco-quick-pill" onclick="sendQuickCommand('show ip interface brief')" title="Show interface status table">sh ip int br</button>
+                                <button type="button" class="cisco-quick-pill" onclick="sendQuickCommand('show ip route')" title="Show routing table">sh ip route</button>
+                                <button type="button" class="cisco-quick-pill" onclick="sendQuickCommand('show running-config')" title="Show running-config">sh run</button>
+                                <button type="button" class="cisco-quick-pill" onclick="sendQuickCommand('configure terminal')" title="Enter configuration mode">conf t</button>
+                                <button type="button" class="cisco-quick-pill" onclick="sendQuickCommand('write memory')" title="Save config to NVRAM">wr mem</button>
+                                <button type="button" class="cisco-quick-pill" onclick="sendQuickCommand('terminal length 0')" title="Disable pagination for continuous dump">term len 0</button>
+                                <button type="button" class="cisco-quick-pill" onclick="sendQuickCommand('show cdp neighbors detail')" title="Show CDP neighbors">sh cdp neigh</button>
+                                <button type="button" class="cisco-quick-pill" onclick="sendQuickCommand('exit')" title="Exit current mode">exit</button>
                             </div>
                             <div class="cisco-terminal-viewport" id="console-output" onclick="focusCliInput()">
                                 <div id="cli-lines"></div>
@@ -521,10 +538,12 @@
                                     <input type="text" id="cli-input" class="cisco-pure-input"
                                         autocomplete="off" spellcheck="false" autocapitalize="off"
                                         onkeydown="handleCliKey(event)" autofocus>
+                                    <span id="cli-spinner" class="cli-spinner d-none" title="Executing command..."><i class="fa-solid fa-circle-notch fa-spin"></i></span>
                                 </div>
                             </div>
                         </div>
                     </div>
+
 
                     <!-- ===== TAB 5: Device Connection Manager ===== -->
                     <div id="tab-connection" class="tab-page">
@@ -721,7 +740,8 @@ router ospf 1
                     <div class="form-row">
                         <div class="form-group col">
                             <label>Device Name</label>
-                            <input type="text" id="ad-name" class="form-control" placeholder="Router-R3" required>
+                            <input type="text" id="ad-name" class="form-control" placeholder="Router-R3" required oninput="validateAddDeviceFormLive()">
+                            <div id="ad-name-err" class="text-danger small mt-1 d-none" style="font-size:11px;"></div>
                         </div>
                         <div class="form-group col">
                             <label>Model</label>
@@ -753,17 +773,19 @@ router ospf 1
                         <div class="form-row" id="ad-ip-port-row">
                             <div class="form-group col-8">
                                 <label id="ad-ip-label">IP Address / Host</label>
-                                <input type="text" id="ad-ip" class="form-control" placeholder="192.168.1.120">
+                                <input type="text" id="ad-ip" class="form-control" placeholder="192.168.1.120" oninput="validateAddDeviceFormLive()">
                             </div>
                             <div class="form-group col-4">
                                 <label id="ad-port-label">Port</label>
-                                <input type="number" id="ad-port" class="form-control" value="22" placeholder="22">
+                                <input type="number" id="ad-port" class="form-control" value="22" placeholder="22" oninput="validateAddDeviceFormLive()">
                             </div>
                         </div>
+                        <div id="ad-ip-err" class="text-danger small mb-1 d-none" style="font-size:11px;margin-top:-6px;"></div>
                         <div class="form-row d-none" id="ad-serial-row">
                             <div class="form-group col-7">
                                 <label>Serial Port (COM Port)</label>
-                                <input type="text" id="ad-serial-port" class="form-control" placeholder="COM3 หรือ /dev/ttyUSB0" value="COM1">
+                                <input type="text" id="ad-serial-port" class="form-control" placeholder="COM3 หรือ /dev/ttyUSB0" value="COM1" oninput="validateAddDeviceFormLive()">
+                                <div id="ad-serial-err" class="text-danger small mt-1 d-none" style="font-size:11px;"></div>
                             </div>
                             <div class="form-group col-5">
                                 <label>Baud Rate</label>
@@ -775,6 +797,7 @@ router ospf 1
                                 </select>
                             </div>
                         </div>
+
                         <div class="form-row d-none" id="ad-pc-fields">
                             <div class="form-group col">
                                 <label>Subnet Mask</label>
@@ -786,13 +809,17 @@ router ospf 1
                             </div>
                         </div>
                         <div class="form-row" id="ad-cred-fields">
-                            <div class="form-group col">
+                            <div class="form-group col-4">
                                 <label>Username</label>
                                 <input type="text" id="ad-user" class="form-control" value="cisco">
                             </div>
-                            <div class="form-group col">
+                            <div class="form-group col-4">
                                 <label>Password</label>
                                 <input type="password" id="ad-pass" class="form-control" value="cisco">
+                            </div>
+                            <div class="form-group col-4">
+                                <label>Enable Secret</label>
+                                <input type="password" id="ad-secret" class="form-control" value="cisco" placeholder="cisco">
                             </div>
                         </div>
                     </div>
@@ -973,7 +1000,55 @@ router ospf 1
         </div>
     </div>
 
-    <script src="{{ url_for('static', filename='js/app.js') }}?v=3.3"></script>
+    <!-- ===== MODAL: Batch Script Runner ===== -->
+    <div id="batch-script-modal" class="modal-backdrop">
+        <div class="modal-card" style="max-width:620px">
+            <div class="modal-header">
+                <div class="modal-title"><i class="fa-solid fa-file-code"></i> Batch Config Script Runner</div>
+                <button class="modal-close-btn" onclick="closeModal('batch-script-modal')">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p class="form-hint mb-1">
+                    วางสคริปต์คำสั่ง Cisco IOS หลายบรรทัดที่ต้องการส่งไปยัง <strong id="batch-target-device" style="color:var(--primary,#38bdf8)">R1</strong> ระบบจะส่งคำสั่งเข้า Router/Switch ให้โดยตรงแบบ Real-time ไม่จำเป็นต้องเปิด PuTTY หรือโปรแกรมภายนอก
+                </p>
+                <div class="form-group">
+                    <label>Configuration Commands (Multi-line Script)</label>
+                    <textarea id="batch-script-text" class="form-control" rows="8" style="font-family:var(--font-mono, monospace);font-size:12px;background:#0d1117;color:#58a6ff;line-height:1.4;" placeholder="interface GigabitEthernet0/0&#10; ip address 10.0.0.1 255.255.255.0&#10; no shutdown&#10;router ospf 1&#10; network 10.0.0.0 0.0.0.255 area 0"></textarea>
+                </div>
+                <div class="form-row" style="gap:6px;">
+                    <div class="col">
+                        <button type="button" class="btn btn-outline btn-sm btn-block" onclick="insertBatchPreset('ospf')">
+                            <i class="fa-solid fa-wand-magic-sparkles"></i> Preset OSPF
+                        </button>
+                    </div>
+                    <div class="col">
+                        <button type="button" class="btn btn-outline btn-sm btn-block" onclick="insertBatchPreset('rip')">
+                            <i class="fa-solid fa-wand-magic-sparkles"></i> Preset RIP
+                        </button>
+                    </div>
+                    <div class="col">
+                        <button type="button" class="btn btn-outline btn-sm btn-block" onclick="insertBatchPreset('int')">
+                            <i class="fa-solid fa-network-wired"></i> Preset Int IP
+                        </button>
+                    </div>
+                </div>
+                <div id="batch-progress" class="mt-2 d-none" style="font-size:12px;padding:8px 12px;border-radius:6px;background:rgba(56,189,248,0.1);color:#38bdf8;border:1px solid rgba(56,189,248,0.2);">
+                    <i class="fa-solid fa-spinner fa-spin"></i> <span id="batch-progress-text">กำลังส่งคำสั่งเข้าอุปกรณ์...</span>
+                </div>
+                <div class="mt-2" style="display:flex;gap:8px;">
+                    <button type="button" class="btn btn-primary" style="flex:2;" id="btn-run-batch" onclick="executeBatchScript()">
+                        <i class="fa-solid fa-play"></i> Execute Script to Terminal
+                    </button>
+                    <button type="button" class="btn btn-outline" style="flex:1;" onclick="closeModal('batch-script-modal')">
+                        Cancel
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="{{ url_for('static', filename='js/app.js') }}?v=3.4"></script>
 </body>
+
 
 </html>

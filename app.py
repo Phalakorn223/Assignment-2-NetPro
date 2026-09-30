@@ -32,8 +32,10 @@ from hardware_profiles import (
 from validators import (
     validate_ip, validate_subnet_mask, validate_wildcard_mask,
     validate_router_id, validate_as_number, validate_port,
-    validate_interface_config
+    validate_interface_config, validate_device_payload, validate_host_ip,
+    check_subnet_overlap
 )
+
 
 app = Flask(__name__)
 
@@ -138,15 +140,13 @@ def get_inventory():
 
 @app.route("/api/inventory", methods=["POST"])
 def add_device():
-    """เพิ่ม device ใหม่"""
+    """เพิ่ม device ใหม่ พร้อม validation ป้องกัน duplicate name และ duplicate IP/port"""
     data = request.json or {}
     dtype = (data.get("device_type_label") or "router").lower()
     conn_type = (data.get("connection_type") or "SSH").upper()
     if dtype == "pc":
         if conn_type not in ("SSH", "TELNET"):
             data["connection_type"] = "PC"
-        if not data.get("ip"):
-            return jsonify({"success": False, "message": "PC ต้องมี IP address"}), 400
     elif dtype in ("network", "cloud"):
         data["device_type_label"] = "network"
         data["connection_type"] = "NETWORK"
@@ -157,13 +157,17 @@ def add_device():
             data["serial_port"] = "COM1"
         data["ip"] = ""
         data["port"] = 0
-    elif not data.get("ip") and conn_type not in ("SERIAL", "PC", "NETWORK") and dtype not in ("network", "cloud"):
-        return jsonify({"success": False, "message": "IP address จำเป็น"}), 400
 
-    if data.get("ip") and conn_type not in ("SERIAL", "NETWORK") and dtype not in ("network", "cloud"):
-        valid, msg = ip_is_valid(data["ip"])
-        if not valid:
-            return jsonify({"success": False, "message": msg}), 400
+    # ตรวจสอบความถูกต้องและป้องกัน Duplicate Name / IP / Port
+    existing_inv = load_inventory()
+    valid, errors = validate_device_payload(data, existing_inv)
+    if not valid:
+        return jsonify({
+            "success": False,
+            "message": errors[0] if errors else "ข้อมูลอุปกรณ์ไม่ถูกต้อง",
+            "errors": errors
+        }), 400
+
     device = add_device_to_inventory(data)
     if dtype == "pc" and data.get("connection_type") == "PC":
         DEMO_DEVICES[device["id"]] = {
@@ -180,6 +184,31 @@ def add_device():
     return jsonify({"success": True, "device": device})
 
 
+@app.route("/api/inventory/<device_id>", methods=["PUT", "PATCH"])
+def update_device(device_id):
+    """แก้ไขข้อมูล device ใน inventory พร้อมตรวจสอบ duplicate"""
+    data = request.json or {}
+    inv = load_inventory()
+    target_idx = -1
+    for idx, d in enumerate(inv):
+        if d.get("id") == device_id or d.get("name") == device_id:
+            target_idx = idx
+            break
+    if target_idx == -1:
+        return jsonify({"success": False, "message": f"ไม่พบอุปกรณ์ '{device_id}'"}), 404
+
+    merged = dict(inv[target_idx])
+    merged.update(data)
+    valid, errors = validate_device_payload(merged, inv, current_device_id=inv[target_idx].get("id"))
+    if not valid:
+        return jsonify({"success": False, "message": errors[0], "errors": errors}), 400
+
+    inv[target_idx] = merged
+    save_inventory(inv)
+    return jsonify({"success": True, "device": merged, "message": "อัปเดตข้อมูลอุปกรณ์เรียบร้อย"})
+
+
+
 @app.route("/api/serial/ports", methods=["GET"])
 def list_serial_ports():
     """สแกนค้นหา COM port / Serial port ที่ต่ออยู่กับเครื่องจริง"""
@@ -194,12 +223,28 @@ def list_serial_ports():
 
 @app.route("/api/inventory/<device_id>", methods=["DELETE"])
 def delete_device(device_id):
-    """ลบ device"""
+    """ลบ device เดี่ยว"""
     if conn_mgr.is_connected(device_id):
         conn_mgr.disconnect(device_id)
     removed = remove_device_from_inventory(device_id)
     DEMO_DEVICES.pop(device_id, None)
     return jsonify({"success": removed, "message": "ลบเรียบร้อย" if removed else "ไม่พบ device"})
+
+
+@app.route("/api/inventory", methods=["DELETE"])
+@app.route("/api/inventory/clear", methods=["POST"])
+def delete_all_devices():
+    """ลบอุปกรณ์ทั้งหมดใน inventory และเคลียร์ session/cache"""
+    for dev_id in list(conn_mgr.pool.keys()):
+        try:
+            conn_mgr.disconnect(dev_id)
+        except Exception:
+            pass
+    conn_mgr.pool.clear()
+    DEMO_DEVICES.clear()
+    save_inventory([])
+    clear_topology_cache()
+    return jsonify({"success": True, "message": "ลบอุปกรณ์ทั้งหมดออกจาก Inventory เรียบร้อยแล้ว"})
 
 
 # ===========================================================================
@@ -449,9 +494,10 @@ def configure_interface(device_id=None):
     is_dhcp = (ip_clean == "dhcp")
 
     if ip and not is_dhcp and not is_no_ip:
-        valid, msg = ip_is_valid(ip)
+        valid, msg = validate_host_ip(ip, mask)
         if not valid:
             return jsonify({"success": False, "message": msg}), 400
+
 
     # Build commands
     if ip:
@@ -746,6 +792,7 @@ def execute_cli():
         output = res.get("output", "")
         prompt = res.get("prompt", "")
         is_password = res.get("is_password", False)
+        is_more = res.get("is_more", False)
         return jsonify({
             "success": res.get("success", False),
             "device_id": device_id,
@@ -753,6 +800,7 @@ def execute_cli():
             "output": output,
             "prompt": prompt,
             "is_password": is_password,
+            "is_more": is_more,
             "message": output if not res.get("success") else ""
         })
     else:
@@ -1058,22 +1106,29 @@ def import_eveng_topology():
 
 @app.route("/api/topology/json", methods=["GET"])
 def get_topology_json():
-    """Auto-Discovery และคืน graph JSON สำหรับ vis-network frontend"""
+    """Auto-Discovery และคืน graph JSON สำหรับ vis-network frontend (ไม่มี mock up หากไม่มี device)"""
     force_refresh = request.args.get("refresh", "").lower() in ("1", "true", "yes")
-    inv = ensure_inventory_initialized()
+    inv = load_inventory()
     if not inv:
-        return jsonify({"success": True, "demo": True, **DEMO_GRAPH_JSON})
+        # หากยังไม่ได้ add device เลยสักตัว จะคืน empty graph (ไม่แสดง mock up)
+        clear_topology_cache()
+        return jsonify({"success": True, "demo": False, "nodes": [], "edges": []})
 
     connected_ids = [d["id"] for d in conn_mgr.get_connected_devices()]
+    inv_ids = {d.get("id") for d in inv}
 
     cached = _load_topology_cache()
     if cached and not force_refresh and cached.get("nodes") and cached.get("edges"):
-        # อัปเดตสถานะ connected ของแต่ละ node ใน cache ให้ตรงกับความเป็นจริง
-        for node in cached.get("nodes", []):
-            nid = node.get("id")
-            if node.get("type") not in ("network", "cloud"):
-                node["status"] = "connected" if conn_mgr.is_connected(nid) else "discovered"
-        return jsonify({"success": True, "cached": True, **cached})
+        # กรอง cache ให้เหลือเฉพาะ devices ที่มีอยู่จริงใน inventory
+        valid_nodes = [n for n in cached["nodes"] if n.get("id") in inv_ids or n.get("type") in ("network", "cloud")]
+        valid_node_ids = {n.get("id") for n in valid_nodes}
+        valid_edges = [e for e in cached["edges"] if e.get("from") in valid_node_ids and e.get("to") in valid_node_ids]
+        if valid_nodes:
+            for node in valid_nodes:
+                nid = node.get("id")
+                if node.get("type") not in ("network", "cloud"):
+                    node["status"] = "connected" if conn_mgr.is_connected(nid) else "disconnected"
+            return jsonify({"success": True, "cached": True, "demo": False, "nodes": valid_nodes, "edges": valid_edges})
 
     topo = None
     if NX_AVAILABLE and connected_ids:
@@ -1095,26 +1150,23 @@ def get_topology_json():
             print(f"[Topology] EVE-NG auto-discovery check skipped: {e}")
 
     if not topo or not topo.get("nodes"):
-        if cached and cached.get("nodes"):
-            topo = cached
-        else:
-            topo = {
-                "nodes": [{"id": d["id"], "name": d.get("name", d["id"]),
-                            "type": d.get("device_type_label", "router"),
-                            "ip": d.get("ip", ""), "model": d.get("model", ""),
-                            "status": "connected" if conn_mgr.is_connected(d["id"]) else "disconnected"}
-                          for d in inv],
-                "edges": []
-            }
+        topo = {
+            "nodes": [{"id": d["id"], "name": d.get("name", d["id"]),
+                        "type": d.get("device_type_label", "router"),
+                        "ip": d.get("ip", ""), "model": d.get("model", ""),
+                        "status": "connected" if conn_mgr.is_connected(d["id"]) else "disconnected"}
+                      for d in inv],
+            "edges": []
+        }
 
     # อัปเดตสถานะ connected
     for node in topo.get("nodes", []):
         nid = node.get("id")
         if node.get("type") not in ("network", "cloud"):
-            node["status"] = "connected" if conn_mgr.is_connected(nid) else "discovered"
+            node["status"] = "connected" if conn_mgr.is_connected(nid) else "disconnected"
 
     _save_topology_cache(topo)
-    return jsonify({"success": True, "demo": len(connected_ids) == 0, **topo})
+    return jsonify({"success": True, "demo": False, **topo})
 
 
 @app.route("/api/topology/interfaces", methods=["GET"])
@@ -1369,4 +1421,4 @@ def save_config(device_id):
 # ===========================================================================
 if __name__ == "__main__":
     print("Starting NetConfig Tracer Studio (v2) on http://127.0.0.1:5000")
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    app.run(host="0.0.0.0", port=5000, debug=True, use_reloader=False)

@@ -10,13 +10,18 @@ import json
 import re
 import struct
 import socket
+import time
+import concurrent.futures
 from typing import Any
+
+_eveng_failed_cache = {}  # host -> timestamp of failure (prevents 3s HTTPS hang on every refresh)
 
 try:
     import networkx as nx
     NX_AVAILABLE = True
 except ImportError:
     NX_AVAILABLE = False
+
 
 
 # ---------------------------------------------------------------------------
@@ -226,17 +231,25 @@ def build_topology_graph(conn_manager, device_ids: list, inventory_devices: list
     # เก็บ interface IP จริงจากทุก device ที่ connected
     all_device_interfaces = {}
     primary_ips = {}
-    for device_id in device_ids:
-        if not conn_manager.is_connected(device_id):
-            continue
-        ifaces = collect_device_interfaces(conn_manager, device_id)
-        if ifaces:
-            all_device_interfaces[device_id] = ifaces
-            for iface in ifaces:
-                ip = iface.get("ip", "")
-                if ip and ip not in ("unassigned", "-"):
-                    primary_ips[device_id] = ip
-                    break
+    # ดึง interface IP จริงจากทุก device ที่ connected แบบขนาน (Parallel) เพื่อลดดีเลย์จาก 15s เหลือ 1s
+    def _fetch_dev_ifaces(did):
+        if not conn_manager.is_connected(did):
+            return did, []
+        try:
+            return did, collect_device_interfaces(conn_manager, did)
+        except Exception:
+            return did, []
+
+    workers = min(8, max(1, len(device_ids)))
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
+        for did, ifaces in executor.map(_fetch_dev_ifaces, device_ids):
+            if ifaces:
+                all_device_interfaces[did] = ifaces
+                for iface in ifaces:
+                    ip = iface.get("ip", "")
+                    if ip and ip not in ("unassigned", "-"):
+                        primary_ips[did] = ip
+                        break
 
     # เสริม interface จาก inventory_devices สำหรับอุปกรณ์ที่ยังไม่มี interface (เช่น Virtual PC หรือโหนดออฟไลน์)
     if inventory_devices:
@@ -255,36 +268,42 @@ def build_topology_graph(conn_manager, device_ids: list, inventory_devices: list
                     if dev_id not in primary_ips:
                         primary_ips[dev_id] = dev_ip
 
-    # ----- ขั้นตอน 1: ลอง EVE-NG Auto-Discovery ก่อน -----
+    # ----- ขั้นตอน 1: ลอง EVE-NG Auto-Discovery ก่อน (เฉพาะ host ที่เป็น candidate จริง) -----
     try:
         from eve_ng_client import auto_discover_eveng
-        # หา EVE-NG host จาก inventory (จัดลำดับให้อุปกรณ์ที่มี console port > 1000 ตรวจสอบก่อน)
+        now = time.time()
         eve_hosts = []
         for dev in inventory_devices:
             ip = dev.get("ip", "")
             port = int(dev.get("port") or 0)
-            if ip and ip not in ("127.0.0.1", "localhost"):
-                if port > 1000 and ip not in eve_hosts:
-                    eve_hosts.insert(0, ip)
-                elif ip not in eve_hosts:
-                    eve_hosts.append(ip)
+            is_cand = (port > 1000 or dev.get("source") == "eveng" or "eve" in str(dev.get("model", "")).lower())
+            if ip and ip not in ("127.0.0.1", "localhost") and is_cand:
+                if now - _eveng_failed_cache.get(ip, 0) > 300:
+                    if ip not in eve_hosts:
+                        eve_hosts.append(ip)
+
         for host in eve_hosts:
-            eve_topo = auto_discover_eveng(host, "admin", "eve", inventory_devices, all_device_interfaces)
-            if eve_topo and eve_topo.get("nodes") and eve_topo.get("edges"):
-                print(f"[Topology] Successfully auto-discovered topology from EVE-NG ({host})!")
-                G = nx.MultiGraph()
-                for n in eve_topo["nodes"]:
-                    G.add_node(n["id"], **n)
-                for e in eve_topo["edges"]:
-                    G.add_edge(e["from"], e["to"],
-                               original_from=e["from"],
-                               local_port=e.get("from_port", ""),
-                               remote_port=e.get("to_port", ""),
-                               local_ip=e.get("from_ip", ""),
-                               remote_ip=e.get("to_ip", ""),
-                               status=e.get("status", "up"),
-                               method="eveng")
-                return G
+            try:
+                eve_topo = auto_discover_eveng(host, "admin", "eve", inventory_devices, all_device_interfaces)
+                if eve_topo and eve_topo.get("nodes") and eve_topo.get("edges"):
+                    print(f"[Topology] Successfully auto-discovered topology from EVE-NG ({host})!")
+                    G = nx.MultiGraph()
+                    for n in eve_topo["nodes"]:
+                        G.add_node(n["id"], **n)
+                    for e in eve_topo["edges"]:
+                        G.add_edge(e["from"], e["to"],
+                                   original_from=e["from"],
+                                   local_port=e.get("from_port", ""),
+                                   remote_port=e.get("to_port", ""),
+                                   local_ip=e.get("from_ip", ""),
+                                   remote_ip=e.get("to_ip", ""),
+                                   status=e.get("status", "up"),
+                                   method="eveng")
+                    return G
+                else:
+                    _eveng_failed_cache[host] = now
+            except Exception:
+                _eveng_failed_cache[host] = now
     except Exception as e:
         print(f"[Topology] EVE-NG auto-discovery skipped: {e}")
 
@@ -303,51 +322,58 @@ def build_topology_graph(conn_manager, device_ids: list, inventory_devices: list
             "status": "connected" if conn_manager.is_connected(dev_id) else "disconnected",
         })
 
-    # 1. CDP / LLDP Discovery (จับคู่ข้ามเครื่องด้วย IP จริง)
-    for device_id in device_ids:
-        if not conn_manager.is_connected(device_id):
-            continue
+    # 1. CDP / LLDP Discovery (ดึงข้อมูลเพื่อนบ้านแบบขนาน Parallel)
+    def _fetch_cdp_neighbors(did):
+        if not conn_manager.is_connected(did):
+            return did, []
+        try:
+            n = discover_neighbors_cdp(conn_manager, did)
+            if not n:
+                n = discover_neighbors_lldp(conn_manager, did)
+            return did, n or []
+        except Exception:
+            return did, []
 
-        neighbors = discover_neighbors_cdp(conn_manager, device_id)
-        if not neighbors:
-            neighbors = discover_neighbors_lldp(conn_manager, device_id)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
+        for device_id, neighbors in executor.map(_fetch_cdp_neighbors, device_ids):
+            for n in neighbors:
+                remote_host = n.get("destination_host", "")
+                local_port = n.get("local_port", "")
+                remote_port = n.get("remote_port", "")
+                remote_ip = n.get("management_ip", "")
 
-        for n in neighbors:
-            remote_host = n.get("destination_host", "")
-            local_port = n.get("local_port", "")
-            remote_port = n.get("remote_port", "")
-            remote_ip = n.get("management_ip", "")
+                matched_id = _match_device_by_ip_or_name(remote_host, remote_ip, inventory_devices, all_device_interfaces)
+                if not matched_id or matched_id == device_id:
+                    continue
 
-            matched_id = _match_device_by_ip_or_name(remote_host, remote_ip, inventory_devices, all_device_interfaces)
-            if not matched_id or matched_id == device_id:
-                continue
+                target_id = matched_id
+                if target_id not in G:
+                    G.add_node(target_id, name=remote_host, type="router", ip=remote_ip, model="", status="discovered")
 
-            target_id = matched_id
-            if target_id not in G:
-                G.add_node(target_id, name=remote_host, type="router", ip=remote_ip, model="", status="discovered")
+                # เช็คว่ามี edge ขานี้อยู่แล้วหรือยัง
+                edge_exists = False
+                if G.has_edge(device_id, target_id):
+                    for _, edge_data in G.get_edge_data(device_id, target_id).items():
+                        if edge_data.get("local_port") == local_port and edge_data.get("remote_port") == remote_port:
+                            edge_exists = True
+                            break
 
-            # เช็คว่ามี edge ขานี้อยู่แล้วหรือยัง
-            edge_exists = False
-            if G.has_edge(device_id, target_id):
-                for _, edge_data in G.get_edge_data(device_id, target_id).items():
-                    if edge_data.get("local_port") == local_port and edge_data.get("remote_port") == remote_port:
-                        edge_exists = True
-                        break
-
-            if not edge_exists:
-                G.add_edge(device_id, target_id,
-                           local_port=local_port,
-                           remote_port=remote_port,
-                           local_ip=primary_ips.get(device_id, ""),
-                           remote_ip=remote_ip,
-                           status="up",
-                           method="cdp")
+                if not edge_exists:
+                    G.add_edge(device_id, target_id,
+                               original_from=device_id,
+                               local_port=local_port,
+                               remote_port=remote_port,
+                               local_ip=primary_ips.get(device_id, ""),
+                               remote_ip=remote_ip,
+                               status="up",
+                               method="cdp")
 
     # 2. Subnet-matching: สำคัญมาก! ต้องรันเสมอ ไม่ให้ CDP มากดทับ เพื่อเชื่อมต่อสายในทุก subnet
     if all_device_interfaces:
         G = _smart_subnet_matching(G, all_device_interfaces, primary_ips)
 
     return G
+
 
 
 def _match_device_by_ip_or_name(hostname: str, mgmt_ip: str, inventory_devices: list, all_device_interfaces: dict) -> str:
@@ -447,6 +473,7 @@ def _smart_subnet_matching(G, all_device_interfaces: dict, primary_ips: dict = N
                         break
             if not edge_exists:
                 G.add_edge(m1["dev"], m2["dev"],
+                           original_from=m1["dev"],
                            local_port=m1["if_name"],
                            remote_port=m2["if_name"],
                            local_ip=m1["ip"],
@@ -471,6 +498,7 @@ def _smart_subnet_matching(G, all_device_interfaces: dict, primary_ips: dict = N
                             break
                 if not edge_exists:
                     G.add_edge(m["dev"], net_node_id,
+                               original_from=m["dev"],
                                local_port=m["if_name"],
                                remote_port="",
                                local_ip=m["ip"],
