@@ -348,7 +348,8 @@ def build_topology_graph(conn_manager, device_ids: list, inventory_devices: list
 
                 target_id = matched_id
                 if target_id not in G:
-                    G.add_node(target_id, name=remote_host, type="router", ip=remote_ip, model="", status="discovered")
+                    r_type = "switch" if "sw" in remote_host.lower() or "switch" in remote_host.lower() else "router"
+                    G.add_node(target_id, name=remote_host, type=r_type, ip=remote_ip, model="", status="discovered")
 
                 # เช็คว่ามี edge ขานี้อยู่แล้วหรือยัง
                 edge_exists = False

@@ -18,7 +18,7 @@ from command_builder import (
     build_ip_address_commands, build_interface_state_commands,
     build_static_route, build_default_route,
     build_rip, build_eigrp, build_ospf, build_bgp, preview_commands,
-    merge_router_protocol_commands,
+    merge_router_protocol_commands, build_redistribute, build_mutual_redistribution,
 )
 from command_normalizer import normalize, get_suggestions
 from topology_builder import (
@@ -674,6 +674,55 @@ def configure_routing():
     return jsonify(result)
 
 
+@app.route("/api/routing/mutual-redistribute/preview", methods=["POST"])
+def preview_mutual_redistribute():
+    """Preview CLI commands สำหรับการทำ Mutual Redistribution ระหว่าง 2 protocols"""
+    data = request.get_json(silent=True) or {}
+    proto_a = data.get("proto_a") or {}
+    proto_b = data.get("proto_b") or {}
+    try:
+        cmds = build_mutual_redistribution(proto_a, proto_b)
+        return jsonify({
+            "success": True,
+            "commands": cmds,
+            "preview": preview_commands(cmds)
+        })
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)}), 400
+
+
+@app.route("/api/routing/mutual-redistribute/apply", methods=["POST"])
+def apply_mutual_redistribute():
+    """Apply Two-Way Mutual Redistribution ข้าม 2 protocols ไปยัง ASBR Router"""
+    data = request.get_json(silent=True) or {}
+    device_id = data.get("device_id")
+    if not device_id:
+        return jsonify({"success": False, "message": "device_id จำเป็น"}), 400
+
+    proto_a = data.get("proto_a") or {}
+    proto_b = data.get("proto_b") or {}
+    try:
+        cmds = build_mutual_redistribution(proto_a, proto_b)
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)}), 400
+
+    dev = get_device_by_id(device_id)
+    target_id = dev.get("id", device_id) if dev else device_id
+
+    if not conn_mgr.is_connected(target_id) and not conn_mgr.is_connected(device_id):
+        if dev and (dev.get("device_type_label") or "").lower() not in ("pc", "network"):
+            conn_mgr.connect(target_id, dev, skip_ping=True)
+
+    active_id = target_id if conn_mgr.is_connected(target_id) else (device_id if conn_mgr.is_connected(device_id) else None)
+    if not active_id:
+        return jsonify({"success": False, "message": "Device not connected. Please connect first."})
+
+    result = conn_mgr.send_config(active_id, cmds)
+    result["commands"] = cmds
+    result["preview"] = preview_commands(cmds)
+    return jsonify(result)
+
+
 # ===========================================================================
 # Routes — Show Commands
 # ===========================================================================
@@ -807,7 +856,7 @@ def execute_cli():
         err_msg = conn_err or f"Device '{device_id}' ยังไม่ได้เชื่อมต่อ กรุณากด Connect ก่อนใช้งาน CLI"
         if "PermissionError" in err_msg or "Access is denied" in err_msg:
             err_msg = "ไม่สามารถเปิดพอร์ต COM7 ได้ เนื่องจากพอร์ตถูกใช้งานโดยโปรแกรมอื่น (เช่น Tera Term) — กรุณาปิด Tera Term ก่อนใช้งาน"
-        return jsonify({"success": False, "message": err_msg})
+        return jsonify({"success": False, "command": command or raw_command, "message": err_msg})
 
 
 @app.route("/api/cli/reconnect", methods=["POST"])
@@ -1124,10 +1173,19 @@ def get_topology_json():
         valid_node_ids = {n.get("id") for n in valid_nodes}
         valid_edges = [e for e in cached["edges"] if e.get("from") in valid_node_ids and e.get("to") in valid_node_ids]
         if valid_nodes:
+            inv_map = {d.get("id", ""): d for d in inv}
             for node in valid_nodes:
                 nid = node.get("id")
+                name_lower = (node.get("name") or nid or "").lower()
                 if node.get("type") not in ("network", "cloud"):
                     node["status"] = "connected" if conn_mgr.is_connected(nid) else "disconnected"
+                    inv_dev = inv_map.get(nid, {})
+                    if inv_dev.get("device_type_label"):
+                        node["type"] = inv_dev["device_type_label"]
+                    elif name_lower.startswith("sw") or "switch" in name_lower:
+                        node["type"] = "switch"
+                    elif name_lower.startswith("pc") or "linux" in name_lower or "host" in name_lower:
+                        node["type"] = "pc"
             return jsonify({"success": True, "cached": True, "demo": False, "nodes": valid_nodes, "edges": valid_edges})
 
     topo = None
@@ -1136,16 +1194,24 @@ def get_topology_json():
         G = build_topology_graph(conn_mgr, connected_ids, inv)
         topo = graph_to_json(G, inv)
     else:
-        # ถ้ายังไม่มี connected devices ลอง auto-discover จาก EVE-NG host ใน inventory
+        # ถ้ายังไม่มี connected devices ตรวจสอบเฉพาะ device ที่เป็น EVE-NG host จริงๆ (ไม่บล็อกหรือทำให้หน้าค้าง)
         try:
             from eve_ng_client import auto_discover_eveng
+            from topology_builder import _eveng_failed_cache
+            now = time.time()
             for dev in inv:
                 ip = dev.get("ip", "")
-                if ip and ip not in ("127.0.0.1", "localhost"):
-                    eve_topo = auto_discover_eveng(ip, "admin", "eve", inv)
-                    if eve_topo and eve_topo.get("nodes") and eve_topo.get("edges"):
-                        topo = eve_topo
-                        break
+                is_eve = dev.get("source") == "eveng" or "eve" in str(dev.get("model", "")).lower() or dev.get("device_type_label") in ("cloud", "eveng")
+                if ip and ip not in ("127.0.0.1", "localhost") and is_eve:
+                    if now - _eveng_failed_cache.get(ip, 0) < 300:
+                        continue
+                    try:
+                        eve_topo = auto_discover_eveng(ip, "admin", "eve", inv)
+                        if eve_topo and eve_topo.get("nodes") and eve_topo.get("edges"):
+                            topo = eve_topo
+                            break
+                    except Exception:
+                        _eveng_failed_cache[ip] = now
         except Exception as e:
             print(f"[Topology] EVE-NG auto-discovery check skipped: {e}")
 
@@ -1159,11 +1225,20 @@ def get_topology_json():
             "edges": []
         }
 
-    # อัปเดตสถานะ connected
+    # อัปเดตสถานะ connected และ device type จาก inventory
+    inv_map = {d.get("id", ""): d for d in inv}
     for node in topo.get("nodes", []):
         nid = node.get("id")
+        name_lower = (node.get("name") or nid or "").lower()
         if node.get("type") not in ("network", "cloud"):
             node["status"] = "connected" if conn_mgr.is_connected(nid) else "disconnected"
+            inv_dev = inv_map.get(nid, {})
+            if inv_dev.get("device_type_label"):
+                node["type"] = inv_dev["device_type_label"]
+            elif name_lower.startswith("sw") or "switch" in name_lower:
+                node["type"] = "switch"
+            elif name_lower.startswith("pc") or "linux" in name_lower or "host" in name_lower:
+                node["type"] = "pc"
 
     _save_topology_cache(topo)
     return jsonify({"success": True, "demo": False, **topo})
@@ -1180,10 +1255,27 @@ def get_all_device_interfaces_for_topology():
     for c in connected:
         dev_id = c["id"]
         ifaces = collect_device_interfaces(conn_mgr, dev_id)
-        result[dev_id] = ifaces
-        print(f"[Topology Debug] {dev_id} interfaces:")
-        for iface in ifaces:
-            print(f"  {iface['name']:25s} IP: {iface['ip']:16s} Mask: {iface['mask']:16s} Status: {iface['status']}")
+        if ifaces:
+            result[dev_id] = ifaces
+            print(f"[Topology Debug] {dev_id} interfaces:")
+            for iface in ifaces:
+                print(f"  {iface['name']:25s} IP: {iface['ip']:16s} Mask: {iface['mask']:16s} Status: {iface['status']}")
+
+    # เติมข้อมูลอุปกรณ์จาก Inventory ในกรณีที่ยังไม่ได้กด Connect หรืออุปกรณ์ออฟไลน์
+    inv = load_inventory()
+    for dev in inv:
+        dev_id = dev.get("id")
+        if dev_id and dev_id not in result:
+            dev_ip = (dev.get("ip") or "").strip()
+            dev_mask = (dev.get("mask") or "255.255.255.0").strip()
+            dtype = (dev.get("device_type_label") or "").lower()
+            if dev_ip and dev_ip not in ("127.0.0.1", "localhost", "unassigned", "-"):
+                result[dev_id] = [{
+                    "name": "ens3" if dtype == "pc" else "Ethernet0/0",
+                    "ip": dev_ip,
+                    "mask": dev_mask,
+                    "status": "connected" if conn_mgr.is_connected(dev_id) else "offline"
+                }]
     return jsonify({"success": True, "device_interfaces": result})
 
 
@@ -1421,4 +1513,4 @@ def save_config(device_id):
 # ===========================================================================
 if __name__ == "__main__":
     print("Starting NetConfig Tracer Studio (v2) on http://127.0.0.1:5000")
-    app.run(host="0.0.0.0", port=5000, debug=True, use_reloader=False)
+    app.run(host="0.0.0.0", port=5000, debug=True, use_reloader=False, threaded=True)

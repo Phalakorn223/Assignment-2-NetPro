@@ -529,3 +529,63 @@ code{background:rgba(59,130,246,.12);color:#93c5fd;padding:1px 5px;border-radius
     color: #ef4444 !important;
 }
 
+/* Packet Tracer Style Topology Overlay */
+.topology-vis-container {
+    position: relative;
+    overflow: hidden;
+    background: radial-gradient(circle at 50% 50%, #0d1527 0%, #070b14 100%);
+}
+.topo-link-tooltip {
+    position: absolute;
+    bottom: 16px;
+    left: 16px;
+    z-index: 100;
+    background: rgba(15, 23, 42, 0.92);
+    backdrop-filter: blur(8px);
+    border: 1px solid rgba(56, 189, 248, 0.35);
+    border-radius: 8px;
+    padding: 10px 14px;
+    font-size: 11.5px;
+    color: #f1f5f9;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6);
+    pointer-events: none;
+    transition: all 0.2s ease;
+    max-width: 320px;
+    line-height: 1.45;
+}
+.topo-link-tooltip .title {
+    font-weight: 700;
+    color: #38bdf8;
+    margin-bottom: 4px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+.topo-link-tooltip .row {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    color: #94a3b8;
+}
+.topo-link-tooltip .val {
+    color: #e2e8f0;
+    font-family: 'Fira Code', monospace;
+    font-size: 11px;
+}
+.topo-pt-badge {
+    display: inline-block;
+    padding: 1px 6px;
+    border-radius: 3px;
+    font-size: 10px;
+    font-weight: 600;
+}
+.topo-pt-badge.up {
+    background: rgba(16, 185, 129, 0.2);
+    color: #34d399;
+    border: 1px solid rgba(16, 185, 129, 0.4);
+}
+.topo-pt-badge.down {
+    background: rgba(239, 68, 68, 0.2);
+    color: #f87171;
+    border: 1px solid rgba(239, 68, 68, 0.4);
+}

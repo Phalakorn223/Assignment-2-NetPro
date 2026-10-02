@@ -343,7 +343,71 @@ class TestAssignment2Fixes(unittest.TestCase):
         data_bc = res_bc.get_json()
         self.assertIn("Broadcast Address", data_bc.get("message"))
 
+    # -------------------------------------------------------------------------
+    # 12. Serial Device Without Credentials
+    # -------------------------------------------------------------------------
+    def test_serial_device_without_credentials(self):
+        """12. การเพิ่ม Serial Device ไม่จำเป็นต้องใส่ Username, Password, Enable Secret"""
+        device_data = {
+            "name": "Router-Serial-NoAuth",
+            "model": "Cisco 4331",
+            "device_type_label": "router",
+            "connection_type": "SERIAL",
+            "serial_port": "COM99",
+            "baudrate": 9600,
+            "username": "",
+            "password": "",
+            "secret": ""
+        }
+        res = self.client.post("/api/inventory", json=device_data)
+        self.assertEqual(res.status_code, 200)
+        data = res.get_json()
+        self.assertTrue(data.get("success"))
+        created = data.get("device")
+        self.assertEqual(created.get("username"), "")
+        self.assertEqual(created.get("password"), "")
+        self.assertEqual(created.get("secret"), "")
+
+        # Verify it persisted in inventory
+        inv = load_inventory()
+        matched = [d for d in inv if d.get("name") == "Router-Serial-NoAuth"]
+        self.assertTrue(len(matched) > 0)
+        self.assertEqual(matched[0].get("connection_type"), "SERIAL")
+        self.assertEqual(matched[0].get("serial_port"), "COM99")
+        self.assertEqual(matched[0].get("username"), "")
+
+        # Clean up
+        self.client.delete(f"/api/inventory/{created.get('id')}")
+
+    # -------------------------------------------------------------------------
+    # 13. Expanded Command Normalizer & Aliases (Tab completion backend)
+    # -------------------------------------------------------------------------
+    def test_expanded_command_normalizer_and_aliases(self):
+        """13. Normalizer รองรับ alias routing, interface shorthand, do prefix, copy run start"""
+        # Routing aliases
+        self.assertEqual(command_normalizer.normalize("sh ip rip db"), "show ip rip database")
+        self.assertEqual(command_normalizer.normalize("sh cdp neigh"), "show cdp neighbors")
+        self.assertEqual(command_normalizer.normalize("sh ip ospf neigh"), "show ip ospf neighbor")
+        self.assertEqual(command_normalizer.normalize("copy run start"), "copy running-config startup-config")
+        self.assertEqual(command_normalizer.normalize("wr mem"), "write memory")
+
+        # Interface shorthand expansion
+        self.assertEqual(command_normalizer.normalize("int gi0/0"), "interface GigabitEthernet0/0")
+        self.assertEqual(command_normalizer.normalize("int fa0/1"), "interface FastEthernet0/1")
+        self.assertEqual(command_normalizer.normalize("int s0/1/0"), "interface Serial0/1/0")
+
+        # Do prefix normalization
+        self.assertEqual(command_normalizer.normalize("do sh ip ro"), "do show ip route")
+        self.assertEqual(command_normalizer.normalize("do wr"), "do write memory")
+
+        # Suggestions
+        suggs = command_normalizer.get_suggestions("sh cdp")
+        self.assertIn("show cdp neighbors", suggs)
+        suggs_do = command_normalizer.get_suggestions("do sh ip")
+        self.assertIn("do show ip route", suggs_do)
+
 
 if __name__ == "__main__":
     unittest.main()
+
 

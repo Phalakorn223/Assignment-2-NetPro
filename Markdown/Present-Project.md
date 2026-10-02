@@ -101,7 +101,7 @@
 
 ---
 
-### 3.3 การทำ Routing ครบทุกโปรโตคอล — 3.0 คะแนน
+### 3.3 การทำ Routing ครบทุกโปรโตคอล & Cross-Protocol Redistribution — 3.0 คะแนน
 ครอบคลุมทุกโปรโตคอลการหาเส้นทางตามหลักสูตร Network Engineering:
 
 ```
@@ -116,6 +116,23 @@
 
 - **Dynamic Network Statements Container**: สามารถกดปุ่ม **+ Add Network** เพื่อเพิ่มเส้นทางเครือข่ายได้ไม่จำกัดบรรทัด
 - **Cisco IOS Command Live Preview**: ด้านล่างของฟอร์มจะมีกล่อง Preview แสดงชุดคำสั่ง Cisco IOS แท้ๆ แบบ Real-time ผู้ใช้สามารถตรวจเช็คก่อนกดยืนยัน Execute เข้าเราเตอร์
+
+#### ⭐ ไฮไลต์เด็ด: Route Redistribution ข้าม 4 Protocol (RIP ↔ OSPF ↔ EIGRP ↔ BGP)
+ในระบบเครือข่ายขนาดใหญ่ที่มีทั้ง Internal Gateway Protocol (IGP) และ External Gateway Protocol (EGP) การจะทำให้ทุก Protocol คุยข้าม Subnet คนละวงกันได้ จำเป็นต้องมี **Border Router (ASBR)** ทำหน้าที่ **Mutual Route Redistribution**:
+1. **แก้ปัญหาคอขวดและ Nuances ของ Cisco IOS อย่างสมบูรณ์แบบ**:
+   - **OSPF Subnets Injection**: เมื่อ Redistribute เข้า OSPF ระบบจะใส่คีย์เวิร์ด `subnets` ให้อัตโนมัติ (เช่น `redistribute bgp 65001 subnets`, `redistribute eigrp 100 subnets`) ป้องกันปัญหา OSPF กรองทิ้ง Classless Subnets
+   - **EIGRP 5-Metric Auto Generation**: EIGRP ต้องการ Metric 5 ค่า (Bandwidth, Delay, Reliability, Load, MTU) ระบบใส่ค่ามาตรฐาน `10000 100 255 1 1500` ให้อัตโนมัติ ป้องกันปัญหา Metric Infinity
+   - **RIP Seed Hop Metric**: RIP ต้องการ Seed Metric ระบบเติม `metric 1` ให้อัตโนมัติ ป้องกันปัญหา Metric 16 (Unreachable)
+   - **BGP Multi-AS Redistribution**: BGP รองรับการดูดซับ Route จาก RIP, OSPF, EIGRP และ Connected เข้าสู่ BGP Routing Table และส่งต่อออกไปยัง eBGP Neighbor ข้าม Autonomous System
+2. **Mutual Route Redistribution Wizard (Two-Way / Multi-Way Bridging)**:
+   - มีหน้าต่าง Wizard บน UI เลือก Border Router (เช่น โหนด `Redis`), เลือก Protocol ต้นทางและปลายทาง (OSPF, EIGRP, RIP, BGP) ระบบจะ Gen คำสั่ง Two-way CLI ที่ถูกต้องตามมาตรฐาน Cisco IOS แล้ว Apply เข้าอุปกรณ์ทันที
+3. **ผลการทดสอบจริงบน EVE-NG Topology ครบทั้ง 4 Protocol (12/12 Pings Passed)**:
+   - **RIP Domain**: R1 (`10.1.1.1/24`), R2 (`10.2.2.1/24`)
+   - **OSPF Domain**: R3 (`10.3.3.1/24`, Area 0)
+   - **EIGRP Domain**: R5 (`10.5.5.1/24`, AS 100)
+   - **BGP Domain**: R4 (AS 65002, `10.4.4.1/24`), R6 (AS 65003, `10.6.6.1/24`)
+   - **ASBR Node**: `Redis` (BGP AS 65001 + OSPF 1 + EIGRP 100 + RIP v2, `10.99.99.1/24`)
+   - **ผลลัพธ์**: ทุกโหนดมี Routing Table ข้ามโปรโตคอลครบ (R4 มี Route `B` ครบทั้ง RIP, OSPF, EIGRP / R1 มี Route `R` ของ BGP / R3 มี `O E2` / R5 มี `D EX`) และ Ping ข้ามโปรโตคอล Loopback-to-Loopback สำเร็จ 100% (12/12 ผ่านทั้งหมด)!
 
 ---
 
@@ -279,3 +296,19 @@ Ran 18 tests in 5.170s
 OK
 ```
 - ประสิทธิภาพความเร็วสูงขึ้นถึง 6 เท่า (จากเดิม 29.5 วินาที เหลือเพียง 5.1 วินาที) มั่นใจได้ว่าการสาธิตหน้าชั้นเรียนจะรวดเร็ว ลื่นไหล และไม่มีอาการค้างสะดุดแน่นอนครับ!
+
+### 3. ชุดทดสอบ Route Redistribution & Cross-Protocol Routing (14/14 Unit Tests + 12/12 Live EVE-NG Pings)
+```bash
+python -m unittest tests/test_redistribution.py
+```
+```text
+..............
+----------------------------------------------------------------------
+Ran 14 tests in 0.008s
+
+OK
+```
+- **Unit Tests (14/14)**: ครอบคลุมการ Redistribute ข้ามโปรโตคอลทั้งหมด: OSPF ↔ EIGRP (PID + 5 Metrics), OSPF ↔ RIP (Subnets + Seed Hop Metric), EIGRP ↔ RIP, BGP (AS Number), Connected & Static, Mutual Redistribution Generator และ API Preview/Apply Endpoints ผ่านครบถ้วน 100%!
+- **Live EVE-NG Integration Test (12/12 Passed)**:
+  - ทดสอบจริงบน Topology จริงที่มีครบ 4 โปรโตคอล: **RIP (R1, R2)**, **OSPF (R3)**, **EIGRP (R5)**, **BGP (R4, R6)** และ **Redis (ASBR)**
+  - ส่ง ICMP Ping ทดสอบข้ามโปรโตคอลทั้งหมด 12 คู่ (Source Loopback0) ผ่านสำเร็จ 100% (12/12)!

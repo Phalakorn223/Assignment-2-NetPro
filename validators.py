@@ -259,8 +259,40 @@ def validate_device_payload(data: dict, existing_devices: list, current_device_i
                 if dev_conn == "SERIAL" and dev_serial == serial_port:
                     errors.append(f"Serial Port '{serial_port}' ถูกใช้งานแล้วโดยอุปกรณ์ '{dev.get('name', dev_id)}'")
                     break
+    elif dtype == "pc" or conn_type == "PC":
+        # ตรวจสอบ Virtual PC
+        if not ip:
+            errors.append("IP Address จำเป็นสำหรับ Virtual PC")
+        else:
+            v_ip, msg_ip = validate_ip(ip)
+            if not v_ip:
+                errors.append(msg_ip)
+            else:
+                for dev in existing_devices:
+                    dev_id = dev.get("id", "")
+                    if current_device_id and dev_id == current_device_id:
+                        continue
+                    dev_ip = (dev.get("ip") or "").strip()
+                    if dev_ip == ip:
+                        errors.append(f"IP '{ip}' ชนกับอุปกรณ์ '{dev.get('name', dev_id)}' ที่มีอยู่ในระบบแล้ว")
+                        break
+
+        gateway = (data.get("gateway") or "").strip()
+        mask = (data.get("mask") or "").strip()
+        if gateway:
+            v_gw, msg_gw = validate_ip(gateway)
+            if not v_gw:
+                errors.append(f"Gateway: {msg_gw}")
+        if mask:
+            v_mask, msg_mask = validate_subnet_mask(mask)
+            if not v_mask:
+                errors.append(f"Subnet Mask: {msg_mask}")
+        if ip and mask:
+            v_host, msg_host = validate_host_ip(ip, mask if mask else "255.255.255.0")
+            if not v_host:
+                errors.append(msg_host)
     else:
-        # IP-based: SSH, TELNET, PC
+        # IP-based: SSH, TELNET (Routers / Switches)
         if not ip:
             errors.append("IP Address จำเป็นสำหรับอุปกรณ์เชื่อมต่อผ่านเครือข่าย")
         else:
@@ -295,23 +327,6 @@ def validate_device_payload(data: dict, existing_devices: list, current_device_i
                                 f"IP '{ip}' พอร์ต '{port_num}' ชนกับอุปกรณ์ '{dev.get('name', dev_id)}' ที่มีอยู่ในระบบแล้ว"
                             )
                             break
-
-        # ตรวจสอบ Virtual PC
-        if dtype == "pc":
-            gateway = (data.get("gateway") or "").strip()
-            mask = (data.get("mask") or "").strip()
-            if gateway:
-                v_gw, msg_gw = validate_ip(gateway)
-                if not v_gw:
-                    errors.append(f"Gateway: {msg_gw}")
-            if mask:
-                v_mask, msg_mask = validate_subnet_mask(mask)
-                if not v_mask:
-                    errors.append(f"Subnet Mask: {msg_mask}")
-            if ip and mask:
-                v_host, msg_host = validate_host_ip(ip, mask if mask else "255.255.255.0")
-                if not v_host:
-                    errors.append(msg_host)
 
     return (len(errors) == 0, errors)
 

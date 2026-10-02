@@ -594,6 +594,7 @@ function openAddDeviceModal() {
     if (nameErr) nameErr.classList.add("d-none");
     if (ipErr) ipErr.classList.add("d-none");
     if (serialErr) serialErr.classList.add("d-none");
+    onAddDeviceProtoChange();
 }
 
 function validateAddDeviceFormLive() {
@@ -708,9 +709,9 @@ async function submitAddDevice(e) {
         port: isSerial ? 0 : (parseInt(document.getElementById("ad-port").value) || (proto === "TELNET" ? 23 : 22)),
         serial_port: isSerial ? (document.getElementById("ad-serial-port")?.value || "COM1").trim().toUpperCase() : undefined,
         baudrate: isSerial ? (parseInt(document.getElementById("ad-baud")?.value) || 9600) : undefined,
-        username: isSerial ? "" : document.getElementById("ad-user").value,
-        password: isSerial ? "" : document.getElementById("ad-pass").value,
-        secret: (document.getElementById("ad-secret")?.value || "").trim() || "cisco",
+        username: isSerial ? "" : (document.getElementById("ad-user")?.value || ""),
+        password: isSerial ? "" : (document.getElementById("ad-pass")?.value || ""),
+        secret: isSerial ? "" : ((document.getElementById("ad-secret")?.value || "").trim() || "cisco"),
         mask: document.getElementById("ad-mask")?.value || "255.255.255.0",
         gateway: document.getElementById("ad-gateway")?.value || "",
     };
@@ -788,9 +789,11 @@ function onAddDeviceTypeChange() {
 }
 
 async function onAddDeviceProtoChange() {
+    const dtype = document.getElementById("ad-type")?.value;
     const proto = document.getElementById("ad-proto")?.value;
     const isSerial = proto === "SERIAL";
     const isTelnet = proto === "TELNET";
+    const isNet = dtype === "network";
     
     const ipPortRow = document.getElementById("ad-ip-port-row");
     const serialRow = document.getElementById("ad-serial-row");
@@ -800,7 +803,8 @@ async function onAddDeviceProtoChange() {
 
     if (ipPortRow) ipPortRow.classList.toggle("d-none", isSerial);
     if (serialRow) serialRow.classList.toggle("d-none", !isSerial);
-    // ไม่ซ่อน credFields เพื่อให้ผู้ใช้สามารถใส่ Enable Secret สำหรับสาย Console ได้ด้วย
+    // เมื่อเลือก Serial port หรือ Network ให้ซ่อน username, password, enable secret ออกตามต้องการ
+    if (credFields) credFields.classList.toggle("d-none", isSerial || isNet);
 
     if (isSerial) {
         if (hintEl) hintEl.innerHTML = `<span style="color:#38bdf8"><i class="fa-solid fa-plug"></i> Serial Console</span>: ใช้ COM Port เช่น COM1, COM7 กับ Baud Rate 9600 (ไม่ต้องระบุ IP Address)<br><span style="color:#fbbf24"><i class="fa-solid fa-triangle-exclamation"></i> <strong>ข้อควรระวัง:</strong> หากเป็น Console บน EVE-NG (เช่น พอร์ต 32769) ให้เลือก Protocol เป็น <strong>Telnet</strong></span>`;
@@ -1200,9 +1204,286 @@ async function clearTopology() {
     }
 }
 
+// =============================================================================
+// CISCO PACKET TRACER TOPOLOGY STUDIO (ICONS, SMART LAYOUT & LABELS)
+// =============================================================================
+let currentTopoRawData = { nodes: [], edges: [] };
+let topoLabelMode = "ports"; // "ports" (default PT) | "ips" | "clean"
+let topoPhysicsFrozen = true;
+
+// 1. Cisco Hardware SVG Icons (Packet Tracer Vector Art)
+function getPacketTracerSvg(type, status = 'connected', isSelected = false) {
+    const isConn = status === 'connected' || status === 'up';
+    const borderRing = isSelected ? '#38bdf8' : (isConn ? '#38bdf8' : '#64748b');
+    const ringW = isSelected ? 3.5 : 2;
+
+    if (type === "router") {
+        // Cisco Router: Circular Blue Disk with 4 Cross Arrows (2 In, 2 Out)
+        return `data:image/svg+xml;charset=utf-8,` + encodeURIComponent(`
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 72 72" width="72" height="72">
+            <defs>
+                <radialGradient id="rGrad_${isSelected}" cx="35%" cy="35%" r="65%">
+                    <stop offset="0%" stop-color="#38bdf8"/>
+                    <stop offset="45%" stop-color="#0284c7"/>
+                    <stop offset="100%" stop-color="#034d75"/>
+                </radialGradient>
+                <filter id="rShadow" x="-20%" y="-20%" width="140%" height="140%">
+                    <feDropShadow dx="0" dy="4" stdDeviation="3.5" flood-color="#000000" flood-opacity="0.6"/>
+                </filter>
+            </defs>
+            <circle cx="36" cy="36" r="31" fill="url(#rGrad_${isSelected})" stroke="${borderRing}" stroke-width="${ringW}" filter="url(#rShadow)"/>
+            <circle cx="36" cy="36" r="23" fill="none" stroke="#7dd3fc" stroke-width="1" opacity="0.35"/>
+            <!-- 4 Cisco Cross Arrows: Top/Bottom pointing In, Left/Right pointing Out -->
+            <path d="M36 12 L30 19 L33.5 19 L33.5 26 L38.5 26 L38.5 19 L42 19 Z" fill="#ffffff"/>
+            <path d="M36 60 L30 53 L33.5 53 L33.5 46 L38.5 46 L38.5 53 L42 53 Z" fill="#ffffff"/>
+            <path d="M12 36 L19 30 L19 33.5 L26 33.5 L26 38.5 L19 38.5 L19 42 Z" fill="#ffffff"/>
+            <path d="M60 36 L53 30 L53 33.5 L46 33.5 L46 38.5 L53 38.5 L53 42 Z" fill="#ffffff"/>
+            <circle cx="36" cy="36" r="4.5" fill="#ffffff"/>
+            ${isConn ? '<circle cx="56" cy="16" r="5" fill="#10b981" stroke="#ffffff" stroke-width="1.5"/>' : '<circle cx="56" cy="16" r="5" fill="#ef4444" stroke="#ffffff" stroke-width="1.5"/>'}
+        </svg>`);
+    }
+
+    if (type === "switch") {
+        // Cisco Switch: 3D Rectangular Emerald/Teal Chassis with 4 Horizontal Arrows
+        return `data:image/svg+xml;charset=utf-8,` + encodeURIComponent(`
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 74 74" width="74" height="74">
+            <defs>
+                <linearGradient id="swGrad_${isSelected}" x1="0%" y1="0%" x2="100%" y2="100%">
+                    <stop offset="0%" stop-color="#10b981"/>
+                    <stop offset="50%" stop-color="#059669"/>
+                    <stop offset="100%" stop-color="#064e3b"/>
+                </linearGradient>
+                <filter id="swShadow" x="-20%" y="-20%" width="140%" height="140%">
+                    <feDropShadow dx="0" dy="4" stdDeviation="3.5" flood-color="#000000" flood-opacity="0.6"/>
+                </filter>
+            </defs>
+            <rect x="7" y="16" width="60" height="42" rx="8" fill="url(#swGrad_${isSelected})" stroke="${borderRing}" stroke-width="${ringW}" filter="url(#swShadow)"/>
+            <!-- Switch Top Arrows pointing Right -->
+            <path d="M16 28 L39 28 L39 24 L48 31 L39 38 L39 34 L16 34 Z" fill="#ffffff"/>
+            <!-- Switch Bottom Arrows pointing Left -->
+            <path d="M58 45 L35 45 L35 41 L26 48 L35 55 L35 51 L58 51 Z" fill="#ffffff"/>
+            <!-- LED status indicators -->
+            <circle cx="16" cy="22" r="2.2" fill="#34d399"/>
+            <circle cx="22" cy="22" r="2.2" fill="#34d399"/>
+            <circle cx="28" cy="22" r="2.2" fill="#34d399"/>
+            <circle cx="34" cy="22" r="2.2" fill="#34d399"/>
+            ${isConn ? '<circle cx="61" cy="18" r="4.5" fill="#10b981" stroke="#ffffff" stroke-width="1.5"/>' : '<circle cx="61" cy="18" r="4.5" fill="#ef4444" stroke="#ffffff" stroke-width="1.5"/>'}
+        </svg>`);
+    }
+
+    if (type === "pc" || type === "host" || type === "server") {
+        // Cisco Packet Tracer End Device: Desktop Workstation
+        return `data:image/svg+xml;charset=utf-8,` + encodeURIComponent(`
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 74 74" width="74" height="74">
+            <defs>
+                <linearGradient id="pcGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+                    <stop offset="0%" stop-color="#6366f1"/>
+                    <stop offset="100%" stop-color="#312e81"/>
+                </linearGradient>
+                <filter id="pcShadow" x="-20%" y="-20%" width="140%" height="140%">
+                    <feDropShadow dx="0" dy="4" stdDeviation="3.5" flood-color="#000000" flood-opacity="0.6"/>
+                </filter>
+            </defs>
+            <rect x="9" y="11" width="56" height="40" rx="5" fill="#1e293b" stroke="${borderRing}" stroke-width="${ringW}" filter="url(#pcShadow)"/>
+            <rect x="14" y="16" width="46" height="30" rx="3" fill="url(#pcGrad)"/>
+            <line x1="19" y1="23" x2="33" y2="23" stroke="#e0e7ff" stroke-width="2.5" stroke-linecap="round"/>
+            <line x1="19" y1="30" x2="48" y2="30" stroke="#a5b4fc" stroke-width="2" stroke-linecap="round"/>
+            <line x1="19" y1="37" x2="28" y2="37" stroke="#c7d2fe" stroke-width="2" stroke-linecap="round"/>
+            <path d="M32 51 L42 51 L45 61 L29 61 Z" fill="#334155"/>
+            <rect x="23" y="61" width="28" height="4" rx="2" fill="#475569"/>
+            ${isConn ? '<circle cx="60" cy="14" r="4.5" fill="#10b981" stroke="#ffffff" stroke-width="1.5"/>' : '<circle cx="60" cy="14" r="4.5" fill="#ef4444" stroke="#ffffff" stroke-width="1.5"/>'}
+        </svg>`);
+    }
+
+    // Cisco Cloud / WAN / Multi-Access Network
+    return `data:image/svg+xml;charset=utf-8,` + encodeURIComponent(`
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 76 76" width="76" height="76">
+        <defs>
+            <linearGradient id="cloudGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+                <stop offset="0%" stop-color="#0284c7"/>
+                <stop offset="100%" stop-color="#0c4a6e"/>
+            </linearGradient>
+            <filter id="cShadow" x="-20%" y="-20%" width="140%" height="140%">
+                <feDropShadow dx="0" dy="4" stdDeviation="3.5" flood-color="#000000" flood-opacity="0.6"/>
+            </filter>
+        </defs>
+        <path d="M22 52 C14 52 9 47 9 41 C9 35 14 30 20 29.5 C22 20 30 15 38 15 C47 15 54 20 56 29 C62 30 67 35 67 41 C67 47 62 52 54 52 Z" fill="url(#cloudGrad)" stroke="${borderRing}" stroke-width="${ringW}" filter="url(#cShadow)"/>
+        <circle cx="28" cy="38" r="3" fill="#ffffff" opacity="0.85"/>
+        <circle cx="48" cy="38" r="3" fill="#ffffff" opacity="0.85"/>
+        <line x1="31" y1="38" x2="45" y2="38" stroke="#ffffff" stroke-width="2" opacity="0.85"/>
+    </svg>`);
+}
+
+// 2. Intelligent Device Type Detection
+function detectDeviceType(n) {
+    const rawType = (n.type || "").toLowerCase();
+    const name = (n.name || n.id || "").toLowerCase();
+    const model = (n.model || "").toLowerCase();
+    if (rawType === "network" || rawType === "cloud" || name.includes("net") || name === "cloud") return "cloud";
+    if (rawType === "switch" || name.startsWith("sw") || name.includes("switch") || model.includes("l2") || model.includes("switch")) return "switch";
+    if (rawType === "pc" || rawType === "host" || rawType === "server" || name.startsWith("pc") || name.includes("linux") || model.includes("desktop") || model.includes("pc")) return "pc";
+    return "router";
+}
+
+// 3. Port Name Shortener for Clean Badges
+function formatPortShort(p) {
+    if (!p) return "";
+    return p.replace("GigabitEthernet", "Gi")
+            .replace("FastEthernet", "Fa")
+            .replace("Ethernet", "e")
+            .replace("Serial", "Se")
+            .replace("Loopback", "Lo");
+}
+
+// 4. Edge Label Generator (Packet Tracer vs IPs vs Clean)
+function buildEdgeLabel(e, fromPart, toPart, mode = topoLabelMode) {
+    if (mode === "clean") return "";
+    if (mode === "ips") {
+        if (e.from_ip && e.to_ip) return `${e.from_ip} ↔ ${e.to_ip}`;
+        if (e.from_ip) return `${e.from_ip}`;
+        if (e.to_ip) return `${e.to_ip}`;
+        return "";
+    }
+    // "ports" mode (Packet Tracer Standard)
+    if (fromPart && toPart) {
+        return `${fromPart} ── ${toPart}`;
+    }
+    if (fromPart) return `${fromPart}`;
+    if (toPart) return `${toPart}`;
+    return "";
+}
+
+// 5. Smart Packet Tracer Hierarchical Layout Engine
+function calcPacketTracerLayout(nodes, edges) {
+    const adj = {};
+    nodes.forEach(n => { adj[n.id] = new Set(); });
+    (edges || []).forEach(e => {
+        if (adj[e.from]) adj[e.from].add(e.to);
+        if (adj[e.to]) adj[e.to].add(e.from);
+    });
+
+    const positions = {};
+    const clouds = [];
+    const switches = [];
+    const routers = [];
+    const pcs = [];
+
+    nodes.forEach(n => {
+        const t = detectDeviceType(n);
+        if (t === "cloud") clouds.push(n);
+        else if (t === "switch") switches.push(n);
+        else if (t === "pc") pcs.push(n);
+        else routers.push(n);
+    });
+
+    // 1. Clouds / WAN / Multi-Access Networks at Top Center
+    clouds.forEach((c, idx) => {
+        const xOffset = (idx - (clouds.length - 1) / 2) * 260;
+        positions[c.id] = { x: xOffset, y: -260 };
+    });
+
+    // 2. Switches in the Middle Distribution Tier
+    switches.sort((a, b) => {
+        const aName = (a.name || a.id).toUpperCase();
+        const bName = (b.name || b.id).toUpperCase();
+        if (aName === "SW2") return -1;
+        if (bName === "SW2") return 1;
+        if (aName === "SW3") return 0;
+        return aName.localeCompare(bName);
+    });
+
+    const swStep = 340;
+    switches.forEach((sw, idx) => {
+        const xPos = (idx - (switches.length - 1) / 2) * swStep;
+        positions[sw.id] = { x: xPos, y: -50 };
+    });
+
+    // 3. Routers (Core / ASBR vs Edge Routers)
+    const coreRouters = [];
+    const edgeRouters = [];
+    routers.forEach(r => {
+        const rName = (r.name || r.id).toLowerCase();
+        if (rName.includes("redis") || rName.includes("core") || rName.includes("asbr")) {
+            coreRouters.push(r);
+        } else {
+            edgeRouters.push(r);
+        }
+    });
+
+    // Core / ASBR Router (Redis) placed below center switch
+    coreRouters.forEach((cr, idx) => {
+        const xPos = (idx - (coreRouters.length - 1) / 2) * 200;
+        positions[cr.id] = { x: xPos, y: 150 };
+    });
+
+    // Attach edge routers to their respective switches
+    const swAttached = {};
+    switches.forEach(sw => { swAttached[sw.id] = []; });
+    const unattachedRouters = [];
+
+    edgeRouters.forEach(r => {
+        let attached = false;
+        for (const sw of switches) {
+            if (adj[r.id] && adj[r.id].has(sw.id)) {
+                swAttached[sw.id].push(r);
+                attached = true;
+                break;
+            }
+        }
+        if (!attached) unattachedRouters.push(r);
+    });
+
+    // Spread attached routers under their respective switch
+    switches.forEach(sw => {
+        const swPos = positions[sw.id] || { x: 0, y: -50 };
+        const attachedList = swAttached[sw.id] || [];
+        // Sort for neat symmetry (e.g., R4, R5, R6 or R3, R2, R1)
+        attachedList.sort((a, b) => {
+            const aN = a.name || a.id;
+            const bN = b.name || b.id;
+            // If on left side, reverse sort so outer router is further left
+            if (swPos.x < 0) return bN.localeCompare(aN);
+            return aN.localeCompare(bN);
+        });
+
+        const count = attachedList.length;
+        attachedList.forEach((r, idx) => {
+            const spread = count > 1 ? (idx - (count - 1) / 2) * 170 : 0;
+            const xPos = swPos.x + spread;
+            const yPos = 140 + Math.abs(spread) * 0.35;
+            positions[r.id] = { x: xPos, y: yPos };
+        });
+    });
+
+    unattachedRouters.forEach((r, idx) => {
+        const xPos = (idx - (unattachedRouters.length - 1) / 2) * 180;
+        positions[r.id] = { x: xPos, y: 260 };
+    });
+
+    // 4. PCs / End Hosts / Linux Servers
+    pcs.forEach((pc, idx) => {
+        let connectedToCloud = false;
+        clouds.forEach(c => {
+            if (adj[pc.id] && adj[pc.id].has(c.id)) connectedToCloud = true;
+        });
+        if (connectedToCloud) {
+            const xPos = (idx - (pcs.length - 1) / 2) * 180;
+            positions[pc.id] = { x: xPos, y: -380 };
+        } else {
+            const xPos = (idx - (pcs.length - 1) / 2) * 180;
+            positions[pc.id] = { x: xPos, y: 300 };
+        }
+    });
+
+    return positions;
+}
+
+// 6. Main Vis.js Network Renderer
 function renderVisNetwork(nodes, edges) {
     const container = document.getElementById("topology-container");
     if (!container || typeof vis === "undefined") return;
+
+    currentTopoRawData = { nodes: nodes || [], edges: edges || [] };
 
     if (!nodes || nodes.length === 0) {
         if (topoNetwork) { topoNetwork.destroy(); topoNetwork = null; }
@@ -1216,94 +1497,84 @@ function renderVisNetwork(nodes, edges) {
         return;
     }
 
-    const nodeColor = (type) => {
-        if (type === "router") return { background: "#1e3a5f", border: "#3b82f6", highlight: { background: "#2563eb", border: "#60a5fa" } };
-        if (type === "switch") return { background: "#1a3a2a", border: "#10b981", highlight: { background: "#059669", border: "#34d399" } };
-        if (type === "network" || type === "cloud") return { background: "#1e293b", border: "#38bdf8", highlight: { background: "#334155", border: "#7dd3fc" } };
-        return { background: "#2d1a3a", border: "#a855f7", highlight: { background: "#7c3aed", border: "#c084fc" } };
-    };
-
     const nodeMap = {};
     (nodes || []).forEach(n => { nodeMap[n.id] = n; });
 
+    // Calculate Packet Tracer clean layout positions
+    const ptPositions = calcPacketTracerLayout(nodes, edges);
+
     const visNodes = new vis.DataSet((nodes || []).map(n => {
-        const isNet = (n.type === "network" || n.type === "cloud");
-        const nodeObj = {
+        const devType = detectDeviceType(n);
+        const isSelected = n.id === activeDeviceId;
+        const iconUri = getPacketTracerSvg(devType, n.status || 'connected', isSelected);
+        const ptPos = ptPositions[n.id] || {};
+
+        return {
             id: n.id,
             label: `${n.name}\n${n.ip || ''}`,
-            shape: n.type === "switch" ? "database" : (isNet ? "box" : "hexagon"),
-            color: nodeColor(n.type),
-            font: { color: "#f8fafc", size: isNet ? 11 : 12, face: "Inter" },
-            borderWidth: n.id === activeDeviceId ? 3 : 1.5,
-            shadow: { enabled: true, color: "rgba(0,0,0,0.5)", size: 8 },
-            title: `Device: ${n.name} (${n.id})\nType: ${n.type}\nIP: ${n.ip || 'N/A'}\nModel: ${n.model || 'N/A'}\nStatus: ${n.status || 'unknown'}`
+            shape: "image",
+            image: iconUri,
+            size: devType === "cloud" ? 36 : 30,
+            x: ptPos.x,
+            y: ptPos.y,
+            font: {
+                color: "#f8fafc",
+                size: 11,
+                face: "Inter, system-ui, sans-serif",
+                vadjust: 6,
+                background: "rgba(11, 17, 32, 0.75)",
+                strokeWidth: 0,
+            },
+            shadow: {
+                enabled: true,
+                color: isSelected ? "rgba(56, 189, 248, 0.7)" : "rgba(0,0,0,0.5)",
+                size: isSelected ? 14 : 7,
+                x: 0, y: 3
+            },
+            title: `อุปกรณ์: ${n.name} (${n.id})\nชนิด: ${devType.toUpperCase()}\nIP: ${n.ip || 'N/A'}\nModel: ${n.model || 'Cisco IOS'}\nสถานะ: ${n.status || 'connected'}`
         };
-        if (isNet) {
-            nodeObj.margin = 12;
-            nodeObj.shapeProperties = { borderRadius: 6 };
-        }
-        return nodeObj;
     }));
-
-    const formatPort = (p) => {
-        if (!p) return "";
-        return p.replace("GigabitEthernet", "Gi")
-                .replace("FastEthernet", "Fa")
-                .replace("Ethernet", "e")
-                .replace("Serial", "Se");
-    };
 
     const visEdges = new vis.DataSet((edges || []).map((e, idx) => {
         const fromName = nodeMap[e.from]?.name || e.from;
         const toName = nodeMap[e.to]?.name || e.to;
-        const fromPart = formatPort(e.from_port);
-        const toPart = formatPort(e.to_port);
+        const fromPart = formatPortShort(e.from_port);
+        const toPart = formatPortShort(e.to_port);
+        const edgeLabel = buildEdgeLabel(e, fromPart, toPart, topoLabelMode);
 
-        let label = "";
-        if (fromPart && toPart) {
-            // Direct router-to-router link: แสดงชื่อ Router และ IP ของแต่ละฝั่งให้ชัดเจน ไม่สับสน
-            if (e.from_ip && e.to_ip) {
-                label = `${fromName} [${fromPart}]: ${e.from_ip}\n↕\n${toName} [${toPart}]: ${e.to_ip}`;
-            } else if (e.from_ip) {
-                label = `${fromName} [${fromPart}]: ${e.from_ip}\n↕\n${toName} [${toPart}]`;
-            } else if (e.to_ip) {
-                label = `${fromName} [${fromPart}]\n↕\n${toName} [${toPart}]: ${e.to_ip}`;
-            } else {
-                label = `${fromName} [${fromPart}] ⟷ ${toName} [${toPart}]`;
-            }
-        } else if (fromPart) {
-            // Router-to-Network link
-            const ipStr = e.from_ip ? ` (${e.from_ip})` : '';
-            label = `${fromName} [${fromPart}]${ipStr}\n⟷\n${toName}`;
-        } else {
-            label = `${fromName} ⟷ ${toName}`;
-        }
+        let tooltipTitle = `🔗 สายเชื่อมต่อ: ${fromName} ↔ ${toName}`;
+        if (fromPart || e.from_ip) tooltipTitle += `\n • ${fromName}: ${fromPart || 'Port'} ${e.from_ip ? '(' + e.from_ip + ')' : ''}`;
+        if (toPart || e.to_ip) tooltipTitle += `\n • ${toName}: ${toPart || 'Port'} ${e.to_ip ? '(' + e.to_ip + ')' : ''}`;
+        tooltipTitle += `\n • สถานะ: ${e.status === 'up' ? 'UP (Online)' : 'DOWN'}`;
+        if (e.subnet) tooltipTitle += `\n • Subnet: ${e.subnet}`;
+        if (e.method) tooltipTitle += `\n • Discovery: ${e.method.toUpperCase()}`;
 
-        // Tooltip title
-        let title = `Link: ${fromName} ↔ ${toName}`;
-        if (fromPart || e.from_ip) {
-            title += `\n • ${fromName}: ${fromPart || 'port'}${e.from_ip ? ' (IP: ' + e.from_ip + ')' : ''}`;
-        }
-        if (toPart || e.to_ip) {
-            title += `\n • ${toName}: ${toPart || 'port'}${e.to_ip ? ' (IP: ' + e.to_ip + ')' : ''}`;
-        }
-        if (e.subnet) title += `\n • Subnet: ${e.subnet}`;
-        if (e.method) title += `\n • Discovery: ${e.method}`;
         return {
             id: `edge_${e.from}_${e.to}_${idx}`,
-            from: e.from, to: e.to,
-            label: label,
-            title: title,
-            color: { color: e.status === "up" ? "#10b981" : "#ef4444", highlight: "#38bdf8" },
-            dashes: Boolean(e.from_port && e.from_port.includes("Serial")),
-            width: 2.5,
-            smooth: { enabled: true, type: 'curvedCW', roundness: 0.15 * (idx % 2 === 0 ? 1 : -1) },
+            from: e.from,
+            to: e.to,
+            label: edgeLabel,
+            title: tooltipTitle,
+            color: {
+                color: e.status === "up" ? "#10b981" : "#ef4444",
+                highlight: "#38bdf8",
+                hover: "#67e8f9"
+            },
+            dashes: Boolean(fromPart && fromPart.includes("Se")),
+            width: 2.8,
+            smooth: {
+                enabled: true,
+                type: "continuous",
+                roundness: 0.12
+            },
             font: {
-                color: "#cbd5e1",
+                color: "#e2e8f0",
                 size: 9.5,
-                align: "middle",
-                background: "#0f172a", // Dark badge behind edge label so line doesn't cross text
-                strokeWidth: 0,
+                face: "Fira Code, monospace",
+                align: "horizontal", // Always keep label horizontal (no ugly vertical tilt)
+                background: "#090e1a",
+                strokeWidth: 1,
+                strokeColor: "rgba(56, 189, 248, 0.25)",
             },
         };
     }));
@@ -1311,24 +1582,26 @@ function renderVisNetwork(nodes, edges) {
     const options = {
         physics: {
             enabled: true,
-            solver: "repulsion",
-            repulsion: {
-                nodeDistance: 170,
+            solver: "barnesHut",
+            barnesHut: {
+                gravitationalConstant: -2400,
+                centralGravity: 0.15,
                 springLength: 170,
-                springConstant: 0.05,
-                damping: 0.09,
+                springConstant: 0.04,
+                damping: 0.15,
+                avoidOverlap: 1.0,
             },
             stabilization: {
-                iterations: 100,
+                iterations: 140,
+                fit: true,
             }
         },
-        interaction: { hover: true, tooltipDelay: 200, zoomView: true, dragView: true },
-        nodes: { size: 30 },
-        edges: {
-            smooth: {
-                type: "continuous",
-                roundness: 0.2
-            }
+        interaction: {
+            hover: true,
+            tooltipDelay: 150,
+            zoomView: true,
+            dragView: true,
+            dragNodes: true,
         },
         background: { color: "transparent" },
     };
@@ -1336,21 +1609,65 @@ function renderVisNetwork(nodes, edges) {
     if (topoNetwork) { topoNetwork.destroy(); }
     topoNetwork = new vis.Network(container, { nodes: visNodes, edges: visEdges }, options);
 
+    // After stabilization, FREEZE physics so dragging feels solid like Cisco Packet Tracer!
     topoNetwork.once("stabilizationIterationsDone", () => {
+        topoNetwork.setOptions({ physics: { enabled: false } });
+        topoPhysicsFrozen = true;
+        updatePhysicsIcon();
         topoNetwork.fit({ animation: { duration: 500, easingFunction: "easeInOutQuad" } });
     });
 
-    // Click on node → switch active device
-    topoNetwork.on("click", (params) => {
-        if (params.nodes.length > 0) {
-            selectActiveDevice(params.nodes[0]);
-            // Highlight selected node
-            visNodes.update(nodes.map(n => ({
-                id: n.id,
-                borderWidth: n.id === params.nodes[0] ? 3 : 1.5,
-            })));
+    // Link Hover Inspector Card
+    topoNetwork.on("hoverEdge", (params) => {
+        const edgeId = params.edge;
+        const edgeData = (edges || []).find((e, idx) => `edge_${e.from}_${e.to}_${idx}` === edgeId);
+        if (!edgeData) return;
+
+        const fromDev = nodeMap[edgeData.from] || { name: edgeData.from };
+        const toDev = nodeMap[edgeData.to] || { name: edgeData.to };
+        const tooltip = document.getElementById("topo-link-tooltip");
+        if (tooltip) {
+            tooltip.innerHTML = `
+                <div class="title"><i class="fa-solid fa-link"></i> Link: ${fromDev.name} ⟷ ${toDev.name}</div>
+                <div class="row"><span>${fromDev.name}:</span> <span class="val">${edgeData.from_port || 'Port'} ${edgeData.from_ip ? '(' + edgeData.from_ip + ')' : ''}</span></div>
+                <div class="row"><span>${toDev.name}:</span> <span class="val">${edgeData.to_port || 'Port'} ${edgeData.to_ip ? '(' + edgeData.to_ip + ')' : ''}</span></div>
+                <div class="row" style="margin-top:4px;">
+                    <span>Status:</span>
+                    <span class="topo-pt-badge ${edgeData.status === 'up' ? 'up' : 'down'}">${edgeData.status === 'up' ? 'UP (Connected)' : 'DOWN'}</span>
+                </div>
+                ${edgeData.method ? `<div class="row"><span>Discovery:</span> <span class="val">${edgeData.method.toUpperCase()}</span></div>` : ''}
+            `;
+            tooltip.classList.remove("d-none");
         }
     });
+
+    topoNetwork.on("blurEdge", () => {
+        const tooltip = document.getElementById("topo-link-tooltip");
+        if (tooltip) tooltip.classList.add("d-none");
+    });
+
+    // Click on node → switch active device & refresh halo
+    topoNetwork.on("click", (params) => {
+        if (params.nodes.length > 0) {
+            const selectedId = params.nodes[0];
+            selectActiveDevice(selectedId);
+            // Refresh SVG halos
+            visNodes.update(nodes.map(n => {
+                const devType = detectDeviceType(n);
+                const isSelected = n.id === selectedId;
+                return {
+                    id: n.id,
+                    image: getPacketTracerSvg(devType, n.status || 'connected', isSelected),
+                    shadow: {
+                        enabled: true,
+                        color: isSelected ? "rgba(56, 189, 248, 0.7)" : "rgba(0,0,0,0.5)",
+                        size: isSelected ? 14 : 7,
+                    }
+                };
+            }));
+        }
+    });
+
     // Double-click → open device drawer (Packet Tracer style)
     topoNetwork.on("doubleClick", (params) => {
         if (params.nodes.length > 0) {
@@ -1358,6 +1675,82 @@ function renderVisNetwork(nodes, edges) {
             openDeviceDrawer(params.nodes[0]);
         }
     });
+}
+
+// 7. Topology Toolbar Helpers (Auto-Arrange, Toggle Labels, Physics Freeze, Fit)
+function autoArrangeTopology() {
+    if (!topoNetwork || !currentTopoRawData.nodes || currentTopoRawData.nodes.length === 0) return;
+    const ptPositions = calcPacketTracerLayout(currentTopoRawData.nodes, currentTopoRawData.edges);
+
+    // Disable physics during manual positioning
+    topoNetwork.setOptions({ physics: { enabled: false } });
+    topoPhysicsFrozen = true;
+    updatePhysicsIcon();
+
+    const updates = [];
+    currentTopoRawData.nodes.forEach(n => {
+        const pos = ptPositions[n.id];
+        if (pos) {
+            updates.push({ id: n.id, x: pos.x, y: pos.y });
+        }
+    });
+
+    if (topoNetwork.body && topoNetwork.body.data && topoNetwork.body.data.nodes) {
+        topoNetwork.body.data.nodes.update(updates);
+    }
+    topoNetwork.fit({ animation: { duration: 600, easingFunction: "easeInOutQuad" } });
+    showNotification("จัดเรียงแผนผังโครงสร้างสไตล์ Cisco Packet Tracer เรียบร้อยแล้ว", "success");
+}
+
+function toggleEdgeLabelMode() {
+    const modes = ["ports", "ips", "clean"];
+    const labels = { ports: "Ports", ips: "IPs", clean: "Clean" };
+    const curIdx = modes.indexOf(topoLabelMode);
+    topoLabelMode = modes[(curIdx + 1) % modes.length];
+
+    const btnText = document.getElementById("label-mode-text");
+    if (btnText) btnText.textContent = labels[topoLabelMode];
+
+    if (!topoNetwork || !currentTopoRawData.edges) return;
+    const nodeMap = {};
+    (currentTopoRawData.nodes || []).forEach(n => { nodeMap[n.id] = n; });
+
+    const updates = (currentTopoRawData.edges || []).map((e, idx) => {
+        const fromPart = formatPortShort(e.from_port);
+        const toPart = formatPortShort(e.to_port);
+        return {
+            id: `edge_${e.from}_${e.to}_${idx}`,
+            label: buildEdgeLabel(e, fromPart, toPart, topoLabelMode)
+        };
+    });
+
+    if (topoNetwork.body && topoNetwork.body.data && topoNetwork.body.data.edges) {
+        topoNetwork.body.data.edges.update(updates);
+    }
+    showNotification(`เปลี่ยนโหมดป้ายกำกับสายเป็น: ${labels[topoLabelMode]}`, "info");
+}
+
+function toggleTopologyPhysics() {
+    if (!topoNetwork) return;
+    topoPhysicsFrozen = !topoPhysicsFrozen;
+    topoNetwork.setOptions({ physics: { enabled: !topoPhysicsFrozen } });
+    updatePhysicsIcon();
+    const msg = topoPhysicsFrozen ? "ล็อกตำแหน่งอุปกรณ์แล้ว (วางแล้วอยู่กับที่เหมือน Packet Tracer)" : "ปลดล็อกฟิสิกส์ (อุปกรณ์ลอยตัวอัตโนมัติ)";
+    showNotification(msg, "info");
+}
+
+function updatePhysicsIcon() {
+    const icon = document.getElementById("physics-lock-icon");
+    if (icon) {
+        icon.className = topoPhysicsFrozen ? "fa-solid fa-lock" : "fa-solid fa-lock-open";
+        icon.style.color = topoPhysicsFrozen ? "#38bdf8" : "#94a3b8";
+    }
+}
+
+function fitTopologyView() {
+    if (topoNetwork) {
+        topoNetwork.fit({ animation: { duration: 400, easingFunction: "easeInOutQuad" } });
+    }
 }
 
 // =============================================================================
@@ -1587,6 +1980,22 @@ function setRoutingType(type) {
     const fields = document.getElementById(`routing-fields-${type}`);
     if (fields) fields.classList.remove("d-none");
     toggleRedistributionPanel(type);
+
+    // Update existing redistribute rows for the new target protocol
+    const isOspf = type === "ospf";
+    const isEigrp = type === "eigrp";
+    const isRip = type === "rip";
+    document.querySelectorAll("#redistribute-rows .network-row").forEach(r => {
+        const subnetsWrap = r.querySelector(".redist-subnets-wrap");
+        if (subnetsWrap) subnetsWrap.style.display = isOspf ? "inline-flex" : "none";
+        const metricInput = r.querySelector(".redistribute-metric");
+        if (metricInput && !metricInput.value) {
+            if (isEigrp) metricInput.placeholder = "metric 5 ค่า (10000 100 255 1 1500)";
+            else if (isRip) metricInput.placeholder = "hop count (default 1)";
+            else metricInput.placeholder = "metric (optional)";
+        }
+    });
+
     updateRoutingPreview();
 }
 
@@ -1695,8 +2104,26 @@ function updateRoutingPreview() {
         const redist = getRedistributePayload() || [];
         redist.forEach(entry => {
             let cmd = ` redistribute ${entry.source}`;
-            if (type === "ospf" && entry.subnets) cmd += " subnets";
-            if (entry.metric) cmd += ` metric ${entry.metric}`;
+            if (entry.source === "ospf") {
+                cmd += ` ${entry.process_id || 1}`;
+            } else if (entry.source === "eigrp") {
+                cmd += ` ${entry.as_number || 100}`;
+            } else if (entry.source === "bgp") {
+                cmd += ` ${entry.as_number || 65001}`;
+            }
+
+            if (type === "ospf") {
+                if (entry.subnets !== false) cmd += " subnets";
+                if (entry.metric) cmd += ` metric ${entry.metric}`;
+            } else if (type === "eigrp") {
+                const m = entry.metric || "10000 100 255 1 1500";
+                cmd += ` metric ${m}`;
+            } else if (type === "rip") {
+                const m = entry.metric || "1";
+                cmd += ` metric ${m}`;
+            } else if (type === "bgp") {
+                if (entry.metric) cmd += ` metric ${entry.metric}`;
+            }
             lines.push(cmd);
         });
         const defOrig = getDefaultOriginatePayload();
@@ -1923,6 +2350,7 @@ const CISCO_HELP_DATABASE = {
                 { cmd: "arp", desc: "ARP table" },
                 { cmd: "cdp", desc: "CDP information" },
                 { cmd: "clock", desc: "Display the system clock" },
+                { cmd: "controllers", desc: "Interface controller status" },
                 { cmd: "debugging", desc: "State of each debugging option" },
                 { cmd: "history", desc: "Display the session command history" },
                 { cmd: "interfaces", desc: "Interface status and configuration" },
@@ -1936,11 +2364,18 @@ const CISCO_HELP_DATABASE = {
                 { cmd: "vlan", desc: "VLAN status" }
             ],
             "sh": [
+                { cmd: "arp", desc: "ARP table" },
+                { cmd: "cdp", desc: "CDP information" },
+                { cmd: "clock", desc: "Display the system clock" },
+                { cmd: "controllers", desc: "Interface controller status" },
                 { cmd: "interfaces", desc: "Interface status and configuration" },
                 { cmd: "ip", desc: "IP information" },
+                { cmd: "lldp", desc: "LLDP information" },
+                { cmd: "protocols", desc: "Active network protocols" },
                 { cmd: "running-config", desc: "Current operating configuration" },
-                { cmd: "route", desc: "IP routing table" },
-                { cmd: "version", desc: "System hardware and software status" }
+                { cmd: "startup-config", desc: "Contents of startup configuration" },
+                { cmd: "version", desc: "System hardware and software status" },
+                { cmd: "vlan", desc: "VLAN status" }
             ],
             "show ip": [
                 { cmd: "arp", desc: "IP ARP table" },
@@ -1954,16 +2389,24 @@ const CISCO_HELP_DATABASE = {
                 { cmd: "route", desc: "IP routing table" }
             ],
             "sh ip": [
+                { cmd: "arp", desc: "IP ARP table" },
                 { cmd: "bgp", desc: "BGP information" },
+                { cmd: "dhcp", desc: "DHCP information" },
                 { cmd: "eigrp", desc: "IP-EIGRP show commands" },
                 { cmd: "interface", desc: "IP interface status and configuration" },
                 { cmd: "ospf", desc: "OSPF information" },
+                { cmd: "protocols", desc: "IP routing protocol process information" },
+                { cmd: "rip", desc: "RIP information" },
                 { cmd: "route", desc: "IP routing table" }
             ],
             "show ip interface": [
                 { cmd: "brief", desc: "Brief summary of IP status and configuration" },
+                { cmd: "GigabitEthernet0/0", desc: "GigabitEthernet interface 0/0" },
+                { cmd: "GigabitEthernet0/1", desc: "GigabitEthernet interface 0/1" },
                 { cmd: "Ethernet0/0", desc: "Ethernet interface 0/0" },
                 { cmd: "Ethernet0/1", desc: "Ethernet interface 0/1" },
+                { cmd: "Serial0/0", desc: "Serial interface 0/0" },
+                { cmd: "Loopback0", desc: "Loopback interface 0" },
                 { cmd: "<cr>", desc: "" }
             ],
             "show ip int": [
@@ -1981,14 +2424,52 @@ const CISCO_HELP_DATABASE = {
                 { cmd: "ospf", desc: "Open Shortest Path First (OSPF)" },
                 { cmd: "rip", desc: "Routing Information Protocol (RIP)" },
                 { cmd: "static", desc: "Static routes" },
+                { cmd: "summary", desc: "Summary of all routes" },
+                { cmd: "<cr>", desc: "" }
+            ],
+            "sh ip route": [
+                { cmd: "bgp", desc: "Border Gateway Protocol (BGP)" },
+                { cmd: "connected", desc: "Connected routes" },
+                { cmd: "eigrp", desc: "Enhanced Interior Gateway Routing Protocol (EIGRP)" },
+                { cmd: "ospf", desc: "Open Shortest Path First (OSPF)" },
+                { cmd: "rip", desc: "Routing Information Protocol (RIP)" },
+                { cmd: "static", desc: "Static routes" },
+                { cmd: "summary", desc: "Summary of all routes" },
+                { cmd: "<cr>", desc: "" }
+            ],
+            "show ip rip": [
+                { cmd: "database", desc: "RIP database summary" },
+                { cmd: "<cr>", desc: "" }
+            ],
+            "sh ip rip": [
+                { cmd: "database", desc: "RIP database summary" },
                 { cmd: "<cr>", desc: "" }
             ],
             "show ip ospf": [
                 { cmd: "database", desc: "Database summary" },
                 { cmd: "interface", desc: "Interface information" },
-                { cmd: "neighbor", desc: "Neighbor list" }
+                { cmd: "neighbor", desc: "Neighbor list" },
+                { cmd: "<cr>", desc: "" }
+            ],
+            "sh ip ospf": [
+                { cmd: "database", desc: "Database summary" },
+                { cmd: "interface", desc: "Interface information" },
+                { cmd: "neighbor", desc: "Neighbor list" },
+                { cmd: "<cr>", desc: "" }
+            ],
+            "show ip ospf interface": [
+                { cmd: "brief", desc: "Brief summary of OSPF interfaces" },
+                { cmd: "<cr>", desc: "" }
+            ],
+            "sh ip ospf int": [
+                { cmd: "brief", desc: "Brief summary of OSPF interfaces" }
             ],
             "show ip eigrp": [
+                { cmd: "interfaces", desc: "IP-EIGRP interfaces" },
+                { cmd: "neighbors", desc: "IP-EIGRP neighbors" },
+                { cmd: "topology", desc: "IP-EIGRP topology table" }
+            ],
+            "sh ip eigrp": [
                 { cmd: "interfaces", desc: "IP-EIGRP interfaces" },
                 { cmd: "neighbors", desc: "IP-EIGRP neighbors" },
                 { cmd: "topology", desc: "IP-EIGRP topology table" }
@@ -1996,6 +2477,66 @@ const CISCO_HELP_DATABASE = {
             "show ip bgp": [
                 { cmd: "neighbors", desc: "Detailed information on TCP and BGP neighbors" },
                 { cmd: "summary", desc: "Summary of BGP neighbor status" }
+            ],
+            "sh ip bgp": [
+                { cmd: "neighbors", desc: "Detailed information on TCP and BGP neighbors" },
+                { cmd: "summary", desc: "Summary of BGP neighbor status" }
+            ],
+            "show cdp": [
+                { cmd: "neighbors", desc: "CDP neighbor information" },
+                { cmd: "<cr>", desc: "" }
+            ],
+            "show cdp neighbors": [
+                { cmd: "detail", desc: "Detailed information on CDP neighbors" },
+                { cmd: "<cr>", desc: "" }
+            ],
+            "sh cdp": [
+                { cmd: "neighbors", desc: "CDP neighbor information" }
+            ],
+            "sh cdp neigh": [
+                { cmd: "detail", desc: "Detailed information on CDP neighbors" }
+            ],
+            "show lldp": [
+                { cmd: "neighbors", desc: "LLDP neighbor information" },
+                { cmd: "<cr>", desc: "" }
+            ],
+            "show lldp neighbors": [
+                { cmd: "detail", desc: "Detailed information on LLDP neighbors" },
+                { cmd: "<cr>", desc: "" }
+            ],
+            "sh lldp": [
+                { cmd: "neighbors", desc: "LLDP neighbor information" }
+            ],
+            "sh lldp neigh": [
+                { cmd: "detail", desc: "Detailed information on LLDP neighbors" }
+            ],
+            "show interfaces": [
+                { cmd: "status", desc: "Interfaces status" },
+                { cmd: "GigabitEthernet0/0", desc: "GigabitEthernet IEEE 802.3z" },
+                { cmd: "Ethernet0/0", desc: "IEEE 802.3 Ethernet" },
+                { cmd: "Serial0/0", desc: "Serial interface" },
+                { cmd: "Loopback0", desc: "Loopback interface" },
+                { cmd: "<cr>", desc: "" }
+            ],
+            "sh int": [
+                { cmd: "status", desc: "Interfaces status" }
+            ],
+            "show vlan": [
+                { cmd: "brief", desc: "VLAN brief summary" },
+                { cmd: "<cr>", desc: "" }
+            ],
+            "sh vlan": [
+                { cmd: "brief", desc: "VLAN brief summary" }
+            ],
+            "terminal": [
+                { cmd: "length", desc: "Set number of lines on a screen" },
+                { cmd: "width", desc: "Set width of the display terminal" }
+            ],
+            "terminal length": [
+                { cmd: "0", desc: "Disable pagination" }
+            ],
+            "terminal width": [
+                { cmd: "512", desc: "Display width" }
             ],
             "configure": [
                 { cmd: "terminal", desc: "Configure from the EXEC terminal" },
@@ -2015,7 +2556,7 @@ const CISCO_HELP_DATABASE = {
                 { cmd: "set", desc: "Set the time and date" }
             ],
             "ping": [
-                { cmd: "WORD", desc: "Ping destination IP address or hostname (e.g. 192.168.74.132)" }
+                { cmd: "WORD", desc: "Ping destination IP address or hostname" }
             ],
             "traceroute": [
                 { cmd: "WORD", desc: "Trace destination IP address or hostname" }
@@ -2030,6 +2571,49 @@ const CISCO_HELP_DATABASE = {
                 { cmd: "erase", desc: "Erase NVRAM configuration" },
                 { cmd: "memory", desc: "Write configuration to memory" },
                 { cmd: "<cr>", desc: "" }
+            ]
+        }
+    },
+    user: {
+        title: "User EXEC commands:",
+        commands: [
+            { cmd: "connect", desc: "Open a terminal connection" },
+            { cmd: "disable", desc: "Turn off privileged commands" },
+            { cmd: "disconnect", desc: "Disconnect an existing network connection" },
+            { cmd: "enable", desc: "Turn on privileged commands" },
+            { cmd: "exit", desc: "Exit from the EXEC" },
+            { cmd: "help", desc: "Description of the interactive help system" },
+            { cmd: "ping", desc: "Send echo messages" },
+            { cmd: "resume", desc: "Resume an active network connection" },
+            { cmd: "show", desc: "Show running system information" },
+            { cmd: "ssh", desc: "Open a secure shell client connection" },
+            { cmd: "telnet", desc: "Open a telnet connection" },
+            { cmd: "terminal", desc: "Set terminal line parameters" },
+            { cmd: "traceroute", desc: "Trace route to destination" }
+        ],
+        sub: {
+            "show": [
+                { cmd: "clock", desc: "Display the system clock" },
+                { cmd: "history", desc: "Display the session command history" },
+                { cmd: "ip", desc: "IP information" },
+                { cmd: "users", desc: "Display information about terminal lines" },
+                { cmd: "version", desc: "System hardware and software status" }
+            ],
+            "sh": [
+                { cmd: "ip", desc: "IP information" },
+                { cmd: "version", desc: "System hardware and software status" }
+            ],
+            "show ip": [
+                { cmd: "interface", desc: "IP interface status and configuration" },
+                { cmd: "protocols", desc: "IP routing protocol process information" },
+                { cmd: "route", desc: "IP routing table" }
+            ],
+            "sh ip": [
+                { cmd: "interface", desc: "IP interface status and configuration" },
+                { cmd: "route", desc: "IP routing table" }
+            ],
+            "show ip interface": [
+                { cmd: "brief", desc: "Brief summary of IP status and configuration" }
             ]
         }
     },
@@ -2054,24 +2638,39 @@ const CISCO_HELP_DATABASE = {
         ],
         sub: {
             "interface": [
+                { cmd: "GigabitEthernet0/0", desc: "GigabitEthernet IEEE 802.3z" },
+                { cmd: "GigabitEthernet0/1", desc: "GigabitEthernet IEEE 802.3z" },
+                { cmd: "GigabitEthernet0/2", desc: "GigabitEthernet IEEE 802.3z" },
+                { cmd: "GigabitEthernet0/3", desc: "GigabitEthernet IEEE 802.3z" },
+                { cmd: "FastEthernet0/0", desc: "FastEthernet IEEE 802.3" },
+                { cmd: "FastEthernet0/1", desc: "FastEthernet IEEE 802.3" },
                 { cmd: "Ethernet0/0", desc: "IEEE 802.3 Ethernet" },
                 { cmd: "Ethernet0/1", desc: "IEEE 802.3 Ethernet" },
-                { cmd: "FastEthernet0/0", desc: "FastEthernet IEEE 802.3" },
-                { cmd: "GigabitEthernet0/0", desc: "GigabitEthernet IEEE 802.3z" },
+                { cmd: "Ethernet0/2", desc: "IEEE 802.3 Ethernet" },
+                { cmd: "Ethernet0/3", desc: "IEEE 802.3 Ethernet" },
+                { cmd: "Serial0/0", desc: "Serial interface" },
+                { cmd: "Serial0/1", desc: "Serial interface" },
+                { cmd: "Serial0/1/0", desc: "Serial interface" },
                 { cmd: "Loopback0", desc: "Loopback interface" },
-                { cmd: "Serial0/0", desc: "Serial interface" }
+                { cmd: "Vlan1", desc: "VLAN interface" }
             ],
             "int": [
+                { cmd: "GigabitEthernet0/0", desc: "GigabitEthernet IEEE 802.3z" },
+                { cmd: "GigabitEthernet0/1", desc: "GigabitEthernet IEEE 802.3z" },
+                { cmd: "FastEthernet0/0", desc: "FastEthernet IEEE 802.3" },
                 { cmd: "Ethernet0/0", desc: "IEEE 802.3 Ethernet" },
                 { cmd: "Ethernet0/1", desc: "IEEE 802.3 Ethernet" },
+                { cmd: "Serial0/0", desc: "Serial interface" },
                 { cmd: "Loopback0", desc: "Loopback interface" }
             ],
             "ip": [
+                { cmd: "address", desc: "Configure global IP settings" },
                 { cmd: "default-gateway", desc: "Specify default gateway" },
                 { cmd: "domain-name", desc: "Define default domain name" },
                 { cmd: "route", desc: "Establish static routes" }
             ],
             "ip route": [
+                { cmd: "0.0.0.0 0.0.0.0", desc: "Default route prefix" },
                 { cmd: "A.B.C.D", desc: "Destination prefix mask (e.g. 10.0.0.0 255.0.0.0 192.168.1.1)" }
             ],
             "router": [
@@ -2080,14 +2679,32 @@ const CISCO_HELP_DATABASE = {
                 { cmd: "ospf", desc: "Open Shortest Path First (OSPF)" },
                 { cmd: "rip", desc: "Routing Information Protocol (RIP)" }
             ],
+            "router rip": [
+                { cmd: "<cr>", desc: "" }
+            ],
             "router ospf": [
+                { cmd: "1", desc: "Process ID number" },
                 { cmd: "<1-65535>", desc: "Process ID number (e.g. 1)" }
             ],
             "router eigrp": [
+                { cmd: "100", desc: "Autonomous system number" },
                 { cmd: "<1-65535>", desc: "Autonomous system number (e.g. 100)" }
             ],
             "router bgp": [
+                { cmd: "65001", desc: "Autonomous system number" },
                 { cmd: "<1-65535>", desc: "Autonomous system number (e.g. 65000)" }
+            ],
+            "line": [
+                { cmd: "console 0", desc: "Primary terminal line" },
+                { cmd: "vty 0 4", desc: "Virtual terminal lines" },
+                { cmd: "aux 0", desc: "Auxiliary line" }
+            ],
+            "enable": [
+                { cmd: "secret", desc: "Assign privileged level secret" },
+                { cmd: "password", desc: "Assign privileged level password" }
+            ],
+            "service": [
+                { cmd: "password-encryption", desc: "Encrypt system passwords" }
             ],
             "no": [
                 { cmd: "ip", desc: "Global IP configuration subcommands" },
@@ -2097,7 +2714,8 @@ const CISCO_HELP_DATABASE = {
             "do": [
                 { cmd: "show", desc: "Show running system information" },
                 { cmd: "ping", desc: "Send echo messages" },
-                { cmd: "write", desc: "Write running configuration" }
+                { cmd: "write", desc: "Write running configuration" },
+                { cmd: "clear", desc: "Clear functions" }
             ]
         }
     },
@@ -2121,11 +2739,23 @@ const CISCO_HELP_DATABASE = {
         ],
         sub: {
             "ip": [
-                { cmd: "address", desc: "Set the IP address of an interface" }
+                { cmd: "address", desc: "Set the IP address of an interface" },
+                { cmd: "ospf", desc: "OSPF interface commands" }
             ],
             "ip address": [
-                { cmd: "A.B.C.D", desc: "IP address (e.g. 192.168.1.1 255.255.255.0)" },
-                { cmd: "dhcp", desc: "IP Address negotiated via DHCP" }
+                { cmd: "dhcp", desc: "IP Address negotiated via DHCP" },
+                { cmd: "A.B.C.D", desc: "IP address (e.g. 192.168.1.1 255.255.255.0)" }
+            ],
+            "clock": [
+                { cmd: "rate", desc: "Configure serial clock rate" }
+            ],
+            "clock rate": [
+                { cmd: "64000", desc: "64 kbps" },
+                { cmd: "128000", desc: "128 kbps" }
+            ],
+            "encapsulation": [
+                { cmd: "ppp", desc: "Point-to-Point Protocol" },
+                { cmd: "hdlc", desc: "High-Level Data Link Control" }
             ],
             "no": [
                 { cmd: "description", desc: "Remove interface description" },
@@ -2137,7 +2767,8 @@ const CISCO_HELP_DATABASE = {
             ],
             "do": [
                 { cmd: "show", desc: "Show running system information" },
-                { cmd: "ping", desc: "Send echo messages" }
+                { cmd: "ping", desc: "Send echo messages" },
+                { cmd: "write", desc: "Write running configuration" }
             ]
         }
     },
@@ -2146,26 +2777,112 @@ const CISCO_HELP_DATABASE = {
         commands: [
             { cmd: "auto-summary", desc: "Enable automatic network number summarization" },
             { cmd: "default-information", desc: "Control distribution of default information" },
+            { cmd: "distance", desc: "Define an administrative distance" },
             { cmd: "do", desc: "To run exec commands in config mode" },
             { cmd: "end", desc: "Exit to privileged EXEC mode" },
             { cmd: "exit", desc: "Exit from configure mode" },
             { cmd: "neighbor", desc: "Specify a neighbor router" },
             { cmd: "network", desc: "Enable routing on an IP network" },
             { cmd: "no", desc: "Negate a command or set its defaults" },
+            { cmd: "passive-interface", desc: "Suppress routing updates on an interface" },
             { cmd: "redistribute", desc: "Redistribute information from another routing protocol" },
+            { cmd: "timers", desc: "Adjust routing timers" },
             { cmd: "version", desc: "Set routing protocol version" }
         ],
         sub: {
             "network": [
                 { cmd: "A.B.C.D", desc: "Network number (e.g. 192.168.1.0)" }
             ],
+            "passive-interface": [
+                { cmd: "default", desc: "Suppress updates on all interfaces" },
+                { cmd: "GigabitEthernet0/0", desc: "GigabitEthernet 0/0" },
+                { cmd: "GigabitEthernet0/1", desc: "GigabitEthernet 0/1" },
+                { cmd: "Ethernet0/0", desc: "Ethernet 0/0" },
+                { cmd: "Ethernet0/1", desc: "Ethernet 0/1" },
+                { cmd: "Serial0/0", desc: "Serial 0/0" },
+                { cmd: "Loopback0", desc: "Loopback 0" }
+            ],
+            "default-information": [
+                { cmd: "originate", desc: "Distribute a default route" }
+            ],
+            "redistribute": [
+                { cmd: "bgp", desc: "Border Gateway Protocol" },
+                { cmd: "connected", desc: "Connected routes" },
+                { cmd: "eigrp", desc: "Enhanced Interior Gateway Routing Protocol" },
+                { cmd: "ospf", desc: "Open Shortest Path First" },
+                { cmd: "rip", desc: "Routing Information Protocol" },
+                { cmd: "static", desc: "Static routes" }
+            ],
+            "redistribute ospf": [
+                { cmd: "1 metric 1", desc: "Process ID 1 and metric" },
+                { cmd: "1", desc: "Process ID" }
+            ],
+            "redistribute eigrp": [
+                { cmd: "100 metric 1000 100 255 1 1500", desc: "EIGRP metrics" },
+                { cmd: "100", desc: "Autonomous system number" }
+            ],
+            "redistribute rip": [
+                { cmd: "metric 1", desc: "Metric value" }
+            ],
+            "redistribute connected": [
+                { cmd: "metric 1", desc: "Metric value" },
+                { cmd: "<cr>", desc: "" }
+            ],
+            "redistribute static": [
+                { cmd: "metric 1", desc: "Metric value" },
+                { cmd: "<cr>", desc: "" }
+            ],
+            "neighbor": [
+                { cmd: "A.B.C.D", desc: "Neighbor IP address" },
+                { cmd: "A.B.C.D remote-as", desc: "BGP remote AS" }
+            ],
+            "version": [
+                { cmd: "1", desc: "RIP version 1" },
+                { cmd: "2", desc: "RIP version 2" }
+            ],
             "no": [
                 { cmd: "auto-summary", desc: "Disable automatic network summarization" },
                 { cmd: "neighbor", desc: "Remove neighbor" },
-                { cmd: "network", desc: "Remove network" }
+                { cmd: "network", desc: "Remove network" },
+                { cmd: "passive-interface", desc: "Enable routing updates on an interface" },
+                { cmd: "redistribute", desc: "Remove redistribution" }
             ],
             "do": [
-                { cmd: "show", desc: "Show running system information" }
+                { cmd: "show", desc: "Show running system information" },
+                { cmd: "ping", desc: "Send echo messages" },
+                { cmd: "write", desc: "Write running configuration" }
+            ]
+        }
+    },
+    config_line: {
+        title: "Line configuration commands:",
+        commands: [
+            { cmd: "do", desc: "To run exec commands in config mode" },
+            { cmd: "end", desc: "Exit to privileged EXEC mode" },
+            { cmd: "exec-timeout", desc: "Set the EXEC timeout" },
+            { cmd: "exit", desc: "Exit from configure mode" },
+            { cmd: "login", desc: "Enable password checking" },
+            { cmd: "no", desc: "Negate a command or set its defaults" },
+            { cmd: "password", desc: "Set a password" },
+            { cmd: "transport", desc: "Define transport options" }
+        ],
+        sub: {
+            "login": [
+                { cmd: "local", desc: "Local password checking" },
+                { cmd: "<cr>", desc: "" }
+            ],
+            "transport": [
+                { cmd: "input", desc: "Define which protocols to use when connecting to the terminal server" }
+            ],
+            "transport input": [
+                { cmd: "all", desc: "All protocols" },
+                { cmd: "ssh", desc: "TCP/IP SSH protocol" },
+                { cmd: "telnet", desc: "TCP/IP Telnet protocol" },
+                { cmd: "none", desc: "No protocols" }
+            ],
+            "do": [
+                { cmd: "show", desc: "Show running system information" },
+                { cmd: "ping", desc: "Send echo messages" }
             ]
         }
     }
@@ -2230,17 +2947,6 @@ function formatCiscoHelpTerminal(helpResult) {
     return lines.join("\n");
 }
 
-function formatCiscoHelpTerminal(helpResult) {
-    let lines = [];
-    if (helpResult.title) lines.push(helpResult.title);
-    const maxCmdLen = Math.min(22, Math.max(12, ...helpResult.items.map(it => it.cmd.length + 2)));
-    helpResult.items.forEach(it => {
-        const padded = it.cmd.padEnd(maxCmdLen, " ");
-        lines.push(`  ${padded}  ${it.desc}`);
-    });
-    return lines.join("\n");
-}
-
 function printCiscoHelpInline(currentBuffer) {
     const prompt = getCliPrompt();
     const input = document.getElementById("cli-input");
@@ -2268,6 +2974,9 @@ function appendCliLine(text) {
     div.className = "cli-line";
     div.textContent = text;
     linesContainer.appendChild(div);
+    if (linesContainer.children.length > 2500) {
+        linesContainer.removeChild(linesContainer.firstChild);
+    }
 }
 
 function appendConsole(text, cssClass = "output-line") {
@@ -2276,12 +2985,17 @@ function appendConsole(text, cssClass = "output-line") {
     if (!linesContainer) return;
     const str = String(text);
     const lines = str.split("\n");
-    lines.forEach(l => {
+    const frag = document.createDocumentFragment();
+    for (let i = 0; i < lines.length; i++) {
         const div = document.createElement("div");
         div.className = "cli-line " + (cssClass || "output-line");
-        div.textContent = l;
-        linesContainer.appendChild(div);
-    });
+        div.textContent = lines[i];
+        frag.appendChild(div);
+    }
+    linesContainer.appendChild(frag);
+    while (linesContainer.children.length > 2500) {
+        linesContainer.removeChild(linesContainer.firstChild);
+    }
     scrollToBottom();
 }
 
@@ -2291,12 +3005,17 @@ function appendCliOutput(text) {
     if (!linesContainer) return;
     const str = String(text);
     const lines = str.split("\n");
-    lines.forEach(l => {
+    const frag = document.createDocumentFragment();
+    for (let i = 0; i < lines.length; i++) {
         const div = document.createElement("div");
         div.className = "cli-line";
-        div.textContent = l;
-        linesContainer.appendChild(div);
-    });
+        div.textContent = lines[i];
+        frag.appendChild(div);
+    }
+    linesContainer.appendChild(frag);
+    while (linesContainer.children.length > 2500) {
+        linesContainer.removeChild(linesContainer.firstChild);
+    }
     scrollToBottom();
 }
 
@@ -2360,13 +3079,28 @@ async function sendMorePaging(key = " ") {
     focusCliInput();
 }
 
-async function handleTabAutocomplete() {
-    const input = document.getElementById("cli-input");
-    if (!input) return;
-    const val = input.value;
-    const trimmed = val.trim();
-    if (!trimmed) return;
+function getLongestCommonPrefix(strings) {
+    if (!strings || strings.length === 0) return "";
+    let prefix = strings[0];
+    for (let i = 1; i < strings.length; i++) {
+        while (!strings[i].toLowerCase().startsWith(prefix.toLowerCase())) {
+            prefix = prefix.slice(0, -1);
+            if (!prefix) return "";
+        }
+    }
+    return prefix;
+}
 
+async function handleTabAutocomplete(customInput = null) {
+    const input = customInput || document.getElementById("cli-input");
+    if (!input) return;
+    const rawVal = input.value;
+    if (!rawVal.trim()) return;
+
+    const endsWithSpace = rawVal.endsWith(" ");
+    const trimmed = rawVal.trim();
+
+    // 1. ตรวจสอบโหมดอุปกรณ์ Linux / Virtual PC
     if (isCurrentDeviceLinux()) {
         const linuxAlias = {
             "ip a": "ip addr",
@@ -2375,42 +3109,128 @@ async function handleTabAutocomplete() {
             "ifc": "ifconfig",
             "sudo apt up": "sudo apt update",
             "sudo apt in": "sudo apt install -y ",
+            "apt up": "sudo apt update",
+            "apt in": "sudo apt install -y ",
             "sys": "systemctl status ssh",
             "cat os": "cat /etc/os-release"
         };
-        if (linuxAlias[trimmed.toLowerCase()]) {
-            input.value = linuxAlias[trimmed.toLowerCase()];
+        const lowerTrim = trimmed.toLowerCase();
+        if (linuxAlias[lowerTrim]) {
+            input.value = linuxAlias[lowerTrim] + " ";
             return;
         }
-        const matches = LINUX_HELP_DATABASE.commands.filter(c => c.cmd.toLowerCase().startsWith(trimmed.toLowerCase()));
+        const matches = (LINUX_HELP_DATABASE.commands || []).filter(c => c.cmd.toLowerCase().startsWith(lowerTrim));
         if (matches.length === 1) {
             input.value = matches[0].cmd + " ";
+            return;
+        } else if (matches.length > 1) {
+            const prompt = getCliPrompt();
+            appendCliLine(`${prompt}${input.value}`);
+            appendCliOutput(matches.map(m => m.cmd).join("  "));
             return;
         }
     }
 
+    // 2. Comprehensive Cisco Alias Map (ครอบคลุมคำสั่งหลักและคำสั่งย่อทั้งหมดในแล็บ)
     const aliasMap = {
+        // Show commands — General
         "sh": "show ",
         "sh ip": "show ip ",
         "sh ip int": "show ip interface ",
         "sh ip int br": "show ip interface brief",
         "sh ip int brief": "show ip interface brief",
+        "show ip int br": "show ip interface brief",
+        "show ip int brief": "show ip interface brief",
         "sh run": "show running-config",
+        "show run": "show running-config",
         "sh start": "show startup-config",
+        "show start": "show startup-config",
         "sh ver": "show version",
-        "sh ip ro": "show ip route",
-        "sh ip route": "show ip route",
-        "sh ip proto": "show ip protocols",
+        "show ver": "show version",
         "sh cont": "show controllers",
         "sh contr": "show controllers",
         "sh controllers": "show controllers",
         "show cont": "show controllers",
+        "show contr": "show controllers",
+        // Show commands — Routing
+        "sh ip ro": "show ip route",
+        "sh ip route": "show ip route",
+        "show ip ro": "show ip route",
+        "sh ip proto": "show ip protocols",
+        "show ip proto": "show ip protocols",
+        // Show commands — Protocols
+        "sh ip rip": "show ip rip database",
+        "sh ip rip db": "show ip rip database",
+        "show ip rip db": "show ip rip database",
+        "sh ip rip database": "show ip rip database",
+        "sh ip ospf neigh": "show ip ospf neighbor",
+        "show ip ospf neigh": "show ip ospf neighbor",
+        "sh ip ospf db": "show ip ospf database",
+        "show ip ospf db": "show ip ospf database",
+        "sh ip ospf int": "show ip ospf interface brief",
+        "sh ip ospf int br": "show ip ospf interface brief",
+        "show ip ospf int br": "show ip ospf interface brief",
+        "sh ip eigrp neigh": "show ip eigrp neighbors",
+        "show ip eigrp neigh": "show ip eigrp neighbors",
+        "sh ip eigrp top": "show ip eigrp topology",
+        "show ip eigrp top": "show ip eigrp topology",
+        "sh ip eigrp int": "show ip eigrp interfaces",
+        "show ip eigrp int": "show ip eigrp interfaces",
+        "sh ip bgp sum": "show ip bgp summary",
+        "show ip bgp sum": "show ip bgp summary",
+        "sh ip bgp neigh": "show ip bgp neighbors",
+        "show ip bgp neigh": "show ip bgp neighbors",
+        // Show commands — CDP / LLDP / Interfaces
+        "sh cdp": "show cdp neighbors detail",
+        "show cdp": "show cdp neighbors detail",
+        "sh cdp neigh": "show cdp neighbors detail",
+        "show cdp neigh": "show cdp neighbors detail",
+        "show cdp neighbor": "show cdp neighbors detail",
+        "sh cdp neighbor": "show cdp neighbors detail",
+        "sh lldp": "show lldp neighbors detail",
+        "show lldp": "show lldp neighbors detail",
+        "sh lldp neigh": "show lldp neighbors detail",
+        "show lldp neigh": "show lldp neighbors detail",
+        "sh int stat": "show interfaces status",
+        "show int stat": "show interfaces status",
+        "sh int": "show interfaces status",
+        "show int": "show interfaces status",
+        "sh interfaces": "show interfaces status",
+        "sh vlan": "show vlan",
+        "sh vlan br": "show vlan brief",
+        "show vlan br": "show vlan brief",
+        "sh arp": "show arp",
+        // Configure & Interface
         "conf": "configure terminal",
         "conf t": "configure terminal",
+        "conf term": "configure terminal",
         "config": "configure terminal",
         "config t": "configure terminal",
+        "config term": "configure terminal",
         "config router": "router ",
         "config router rip": "router rip",
+        "int": "interface ",
+        "no sh": "no shutdown",
+        "no shut": "no shutdown",
+        "shut": "shutdown",
+        "ip add": "ip address ",
+        "ip addr": "ip address ",
+        "ip add dhcp": "ip address dhcp",
+        "ip addr dhcp": "ip address dhcp",
+        "no ip add": "no ip address",
+        "no ip addr": "no ip address",
+        // Save & Utilities
+        "wr": "write memory",
+        "wr mem": "write memory",
+        "write mem": "write memory",
+        "copy run start": "copy running-config startup-config",
+        "copy run sta": "copy running-config startup-config",
+        "copy run": "copy running-config startup-config",
+        "term len 0": "terminal length 0",
+        "term len": "terminal length 0",
+        "term length 0": "terminal length 0",
+        "term width 512": "terminal width 512",
+        // Routing protocols configuration
         "router r": "router rip",
         "router ri": "router rip",
         "router rip": "router rip",
@@ -2423,49 +3243,102 @@ async function handleTabAutocomplete() {
         "router b": "router bgp 65001",
         "router bg": "router bgp 65001",
         "router bgp": "router bgp 65001",
-        "int": "interface ",
-        "no sh": "no shutdown",
-        "no shut": "no shutdown",
-        "no au": "no auto-summary",
+        "pass": "passive-interface ",
+        "passive": "passive-interface ",
         "no auto": "no auto-summary",
-        "ip add": "ip address ",
-        "wr": "write memory",
-        "wr mem": "write memory",
+        "default-info orig": "default-information originate",
+        "default-info": "default-information originate",
+        "default-information orig": "default-information originate",
         "net": "network ",
-        "ver": "version 2",
-        "pass": "passive-interface "
+        "ver 2": "version 2",
+        // Exec & Line
+        "en": "enable",
+        "dis": "disable",
+        "line con 0": "line console 0",
+        "line vty 0 4": "line vty 0 4"
     };
 
-    const lowerTrim = trimmed.toLowerCase();
-    if (aliasMap[lowerTrim]) {
-        input.value = aliasMap[lowerTrim];
+    // 3. จัดการคำนำหน้า 'do ' ใน config modes (เช่น 'do sh ip ro' -> 'do show ip route')
+    let workVal = trimmed;
+    let doPrefix = "";
+    if (workVal.toLowerCase().startsWith("do ")) {
+        doPrefix = "do ";
+        workVal = workVal.slice(3).trim();
+    }
+
+    const lowerWork = workVal.toLowerCase();
+
+    // 4. ตรวจสอบ Alias ตรงตัว (เช่น 'sh ip int br' -> 'show ip interface brief ')
+    if (aliasMap[lowerWork]) {
+        let full = aliasMap[lowerWork];
+        if (!full.endsWith(" ") && !full.includes(" ")) full += " ";
+        input.value = doPrefix + full;
         return;
     }
 
-    const mData = CISCO_HELP_DATABASE[cliMode] || CISCO_HELP_DATABASE.exec;
+    // 5. Interface Name Expansion: เช่น 'int gi0/0' -> 'interface GigabitEthernet0/0 '
+    const intfMatch = workVal.match(/^(?:int(?:erface)?\s+)([a-zA-Z]+)(\d.*)$/i);
+    if (intfMatch) {
+        const typeToken = intfMatch[1].toLowerCase();
+        const numToken = intfMatch[2];
+        let fullType = null;
+        if (["g", "gi", "gig", "gigabitethernet"].includes(typeToken)) fullType = "GigabitEthernet";
+        else if (["fa", "fast", "fastethernet", "f"].includes(typeToken)) fullType = "FastEthernet";
+        else if (["e", "eth", "ethernet"].includes(typeToken)) fullType = "Ethernet";
+        else if (["s", "se", "ser", "serial"].includes(typeToken)) fullType = "Serial";
+        else if (["lo", "loop", "loopback"].includes(typeToken)) fullType = "Loopback";
+        else if (["vl", "vlan"].includes(typeToken)) fullType = "Vlan";
 
-    // ตรวจสอบ subcommands ตาม prefix เช่น "router r" -> "router rip "
-    const words = trimmed.split(/\s+/);
-    if (words.length > 1) {
-        const prefix = words.slice(0, -1).join(" ").toLowerCase();
-        const lastWord = words[words.length - 1].toLowerCase();
-        
+        if (fullType) {
+            input.value = `${doPrefix}interface ${fullType}${numToken} `;
+            return;
+        }
+    }
+
+    // 6. Tree-based Subcommand Traversal
+    const activeMode = doPrefix ? "exec" : (cliMode || "exec");
+    const mData = CISCO_HELP_DATABASE[activeMode] || CISCO_HELP_DATABASE.exec;
+
+    const words = workVal.split(/\s+/);
+
+    if (words.length > 1 || endsWithSpace) {
+        let prefix = endsWithSpace ? words.join(" ").toLowerCase() : words.slice(0, -1).join(" ").toLowerCase();
+        let lastWord = endsWithSpace ? "" : words[words.length - 1].toLowerCase();
+
+        // ค้นหา subList จาก mData.sub
         let subList = (mData.sub && mData.sub[prefix]) ? mData.sub[prefix] : null;
         if (!subList && mData.sub) {
             for (const [k, v] of Object.entries(mData.sub)) {
-                if (k.toLowerCase() === prefix || aliasMap[prefix] === k) {
+                const normAlias = aliasMap[prefix]?.trim().toLowerCase();
+                if (k.toLowerCase() === prefix || (normAlias && normAlias === k.toLowerCase())) {
                     subList = v;
                     break;
                 }
             }
         }
+
         if (subList) {
-            const subMatches = subList.filter(s => s.cmd.toLowerCase().startsWith(lastWord) && s.cmd !== "<cr>" && !s.cmd.startsWith("<"));
+            const validSubs = subList.filter(s => s.cmd !== "<cr>" && !s.cmd.startsWith("<"));
+            const subMatches = lastWord 
+                ? validSubs.filter(s => s.cmd.toLowerCase().startsWith(lastWord))
+                : validSubs;
+
             if (subMatches.length === 1) {
-                words[words.length - 1] = subMatches[0].cmd;
-                input.value = words.join(" ") + " ";
+                if (endsWithSpace) {
+                    input.value = `${doPrefix}${workVal} ${subMatches[0].cmd} `;
+                } else {
+                    words[words.length - 1] = subMatches[0].cmd;
+                    input.value = `${doPrefix}${words.join(" ")} `;
+                }
                 return;
             } else if (subMatches.length > 1) {
+                if (!endsWithSpace && lastWord) {
+                    const lcp = getLongestCommonPrefix(subMatches.map(m => m.cmd));
+                    if (lcp.length > lastWord.length) {
+                        words[words.length - 1] = lcp;
+                        input.value = `${doPrefix}${words.join(" ")}`;
+                    }
+                }
                 const prompt = getCliPrompt();
                 appendCliLine(`${prompt}${input.value}`);
                 appendCliOutput(subMatches.map(m => m.cmd).join("  "));
@@ -2474,29 +3347,35 @@ async function handleTabAutocomplete() {
         }
     }
 
-    // Single-word match ใน mData.commands
-    const matches = mData.commands.filter(c => c.cmd.toLowerCase().startsWith(lowerTrim));
-    if (matches.length === 1) {
-        input.value = matches[0].cmd + " ";
-        return;
-    } else if (matches.length > 1) {
+    // 7. Single-word top-level matching
+    if (words.length === 1 && !endsWithSpace) {
+        const matches = (mData.commands || []).filter(c => c.cmd.toLowerCase().startsWith(lowerWork));
+        if (matches.length === 1) {
+            input.value = `${doPrefix}${matches[0].cmd} `;
+            return;
+        } else if (matches.length > 1) {
+            const lcp = getLongestCommonPrefix(matches.map(m => m.cmd));
+            if (lcp.length > lowerWork.length) {
+                input.value = `${doPrefix}${lcp}`;
+            }
+            const prompt = getCliPrompt();
+            appendCliLine(`${prompt}${input.value}`);
+            appendCliOutput(matches.map(m => m.cmd).join("  "));
+            return;
+        }
+    }
+
+    // 8. If ends with space on top-level command, show subcommands
+    if (words.length === 1 && endsWithSpace && mData.sub && mData.sub[lowerWork]) {
         const prompt = getCliPrompt();
         appendCliLine(`${prompt}${input.value}`);
-        appendCliOutput(matches.map(m => m.cmd).join("  "));
+        appendCliOutput(mData.sub[lowerWork].filter(s => s.cmd !== "<cr>" && !s.cmd.startsWith("<")).map(m => m.cmd).join("  "));
         return;
     }
 
-    // Subcommands matching whole string (เช่น "router" กด Tab -> แสดง rip, ospf, eigrp, bgp)
-    if (mData.sub && mData.sub[lowerTrim]) {
-        const prompt = getCliPrompt();
-        appendCliLine(`${prompt}${input.value}`);
-        appendCliOutput(mData.sub[lowerTrim].map(m => m.cmd).join("  "));
-        return;
-    }
-
-    // Fallback: ดึง suggestions จาก backend API
+    // 9. Fallback: ดึง suggestions จาก backend API
     try {
-        const res = await fetch(`/api/suggestions?q=${encodeURIComponent(trimmed)}`);
+        const res = await fetch(`/api/suggestions?q=${encodeURIComponent(input.value.trim())}`);
         const d = await res.json();
         if (d.success && d.suggestions && d.suggestions.length) {
             if (d.suggestions.length === 1) {
@@ -3261,7 +4140,7 @@ async function runSshSetupWizard() {
 }
 
 // =============================================================================
-// REDISTRIBUTION PANEL
+// REDISTRIBUTION PANEL (Enhanced Cross-Protocol Routing Support)
 // =============================================================================
 function toggleRedistributionPanel(type) {
     const panel = document.getElementById("redistribution-panel");
@@ -3271,13 +4150,69 @@ function toggleRedistributionPanel(type) {
     panel.classList.toggle("d-none", !dynamic.includes(type));
 }
 
-function addRedistributeRow() {
+function onRedistSourceRowChange(selectEl) {
+    const row = selectEl.closest(".network-row");
+    if (!row) return;
+    const src = selectEl.value;
+    const idWrap = row.querySelector(".redist-src-id-wrap");
+    const idLabel = row.querySelector(".redist-src-id-label");
+    const idInput = row.querySelector(".redist-src-id");
+
+    if (idWrap && idLabel && idInput) {
+        if (src === "ospf") {
+            idWrap.style.display = "inline-flex";
+            idLabel.textContent = "PID:";
+            idInput.placeholder = "1";
+            if (!idInput.value) idInput.value = "1";
+        } else if (src === "eigrp") {
+            idWrap.style.display = "inline-flex";
+            idLabel.textContent = "AS:";
+            idInput.placeholder = "100";
+            if (!idInput.value) idInput.value = "100";
+        } else if (src === "bgp") {
+            idWrap.style.display = "inline-flex";
+            idLabel.textContent = "AS:";
+            idInput.placeholder = "65001";
+            if (!idInput.value) idInput.value = "65001";
+        } else {
+            idWrap.style.display = "none";
+        }
+    }
+    updateRoutingPreview();
+}
+
+function addRedistributeRow(presetSource = null) {
     const container = document.getElementById("redistribute-rows");
     if (!container) return;
+    const curType = document.getElementById("routing-type-input")?.value || "ospf";
     const row = document.createElement("div");
     row.className = "network-row";
+    row.style.display = "flex";
+    row.style.gap = "6px";
+    row.style.alignItems = "center";
+    row.style.flexWrap = "wrap";
+    row.style.padding = "6px 8px";
+    row.style.borderRadius = "6px";
+    row.style.background = "rgba(255,255,255,0.02)";
+    row.style.border = "1px solid rgba(255,255,255,0.06)";
+    row.style.marginBottom = "6px";
+
+    const isOspf = curType === "ospf";
+    const isEigrp = curType === "eigrp";
+    const isRip = curType === "rip";
+
+    let metricPlaceholder = "metric (optional)";
+    let metricWidth = "120px";
+    if (isEigrp) {
+        metricPlaceholder = "metric 5 ค่า (10000 100 255 1 1500)";
+        metricWidth = "220px";
+    } else if (isRip) {
+        metricPlaceholder = "hop count (default 1)";
+        metricWidth = "140px";
+    }
+
     row.innerHTML = `
-        <select class="form-control redistribute-source" onchange="updateRoutingPreview()" style="max-width:140px">
+        <select class="form-control redistribute-source" onchange="onRedistSourceRowChange(this)" style="max-width:130px">
             <option value="static">Static</option>
             <option value="connected">Connected</option>
             <option value="rip">RIP</option>
@@ -3285,14 +4220,34 @@ function addRedistributeRow() {
             <option value="ospf">OSPF</option>
             <option value="bgp">BGP</option>
         </select>
-        <input type="text" class="form-control redistribute-metric" placeholder="metric (optional)" oninput="updateRoutingPreview()" style="max-width:120px">
-        <label class="checkbox-label" style="font-size:11px;white-space:nowrap">
-            <input type="checkbox" class="redistribute-subnets" onchange="updateRoutingPreview()"> subnets
+        <div class="redist-src-id-wrap" style="display:none;align-items:center;gap:4px;">
+            <span class="redist-src-id-label" style="font-size:11px;color:var(--text-muted,#94a3b8);font-weight:600;">PID:</span>
+            <input type="number" class="form-control redist-src-id" placeholder="1" value="1" oninput="updateRoutingPreview()" style="width:65px;padding:3px 6px;height:30px;font-size:12px;">
+        </div>
+        <label class="checkbox-label redist-subnets-wrap" style="font-size:11px;white-space:nowrap;${isOspf ? '' : 'display:none;'}">
+            <input type="checkbox" class="redistribute-subnets" ${isOspf ? 'checked' : ''} onchange="updateRoutingPreview()"> subnets
         </label>
-        <button type="button" class="remove-row-btn" onclick="removeRow(this)"><i class="fa-solid fa-minus"></i></button>
+        <input type="text" class="form-control redistribute-metric" placeholder="${metricPlaceholder}" oninput="updateRoutingPreview()" style="flex:1;min-width:${metricWidth};height:30px;font-size:12px;">
+        <button type="button" class="remove-row-btn" onclick="removeRow(this)" title="ลบรายการนี้" style="height:30px;width:30px;line-height:30px;padding:0;"><i class="fa-solid fa-minus"></i></button>
     `;
     container.appendChild(row);
+
+    if (presetSource) {
+        const select = row.querySelector(".redistribute-source");
+        if (select) {
+            select.value = presetSource;
+            onRedistSourceRowChange(select);
+        }
+    } else {
+        const select = row.querySelector(".redistribute-source");
+        if (select) onRedistSourceRowChange(select);
+    }
+
     updateRoutingPreview();
+}
+
+function addRedistributePreset(source) {
+    addRedistributeRow(source);
 }
 
 function toggleDefaultOriginateAlways() {
@@ -3311,8 +4266,15 @@ function getRedistributePayload() {
         const source = r.querySelector(".redistribute-source")?.value;
         const metric = r.querySelector(".redistribute-metric")?.value?.trim();
         const subnets = r.querySelector(".redistribute-subnets")?.checked;
+        const idVal = r.querySelector(".redist-src-id")?.value?.trim();
+
         if (source) {
             const item = { source: source, subnets: !!subnets };
+            if (source === "ospf") {
+                item.process_id = parseInt(idVal) || 1;
+            } else if (source === "eigrp" || source === "bgp") {
+                item.as_number = parseInt(idVal) || (source === "eigrp" ? 100 : 65001);
+            }
             if (metric) item.metric = metric;
             result.push(item);
         }
@@ -3325,6 +4287,191 @@ function getDefaultOriginatePayload() {
     if (!enabled) return null;
     const always = document.getElementById("default-originate-always")?.checked;
     return { enabled: true, always: !!always };
+}
+
+// -----------------------------------------------------------------------------
+// Mutual Route Redistribution Wizard (Two-Way Cross-Protocol Routing)
+// -----------------------------------------------------------------------------
+function openMutualRedistModal() {
+    const select = document.getElementById("mutual-device-select");
+    if (select) {
+        select.innerHTML = "";
+        const routers = inventoryDevices.filter(d => (d.device_type_label || "").toLowerCase() !== "pc");
+        const list = routers.length > 0 ? routers : inventoryDevices;
+        list.forEach(d => {
+            const opt = document.createElement("option");
+            opt.value = d.id;
+            opt.textContent = `${d.name || d.id} (${d.ip || d.connection_type || 'Device'})`;
+            if (d.id === activeDeviceId) opt.selected = true;
+            select.appendChild(opt);
+        });
+    }
+    onMutualProtoChange();
+    openModal("mutual-redist-modal");
+}
+
+function onMutualProtoChange() {
+    const protoA = document.getElementById("mutual-proto-a")?.value || "ospf";
+    const protoB = document.getElementById("mutual-proto-b")?.value || "eigrp";
+
+    const wrapA = document.getElementById("mutual-id-a-wrap");
+    const labelA = document.getElementById("mutual-id-a-label");
+    const inputA = document.getElementById("mutual-id-a");
+    if (wrapA && labelA && inputA) {
+        if (protoA === "ospf") {
+            wrapA.style.display = "block";
+            labelA.textContent = "Process ID";
+            inputA.placeholder = "1";
+            if (!inputA.value) inputA.value = "1";
+        } else if (protoA === "eigrp" || protoA === "bgp") {
+            wrapA.style.display = "block";
+            labelA.textContent = "AS Number";
+            inputA.placeholder = protoA === "eigrp" ? "100" : "65001";
+            if (!inputA.value) inputA.value = protoA === "eigrp" ? "100" : "65001";
+        } else {
+            wrapA.style.display = "none";
+        }
+    }
+
+    const wrapB = document.getElementById("mutual-id-b-wrap");
+    const labelB = document.getElementById("mutual-id-b-label");
+    const inputB = document.getElementById("mutual-id-b");
+    if (wrapB && labelB && inputB) {
+        if (protoB === "ospf") {
+            wrapB.style.display = "block";
+            labelB.textContent = "Process ID";
+            inputB.placeholder = "1";
+            if (!inputB.value) inputB.value = "1";
+        } else if (protoB === "eigrp" || protoB === "bgp") {
+            wrapB.style.display = "block";
+            labelB.textContent = "AS Number";
+            inputB.placeholder = protoB === "eigrp" ? "100" : "65001";
+            if (!inputB.value) inputB.value = protoB === "eigrp" ? "100" : "65001";
+        } else {
+            wrapB.style.display = "none";
+        }
+    }
+
+    updateMutualRedistPreview();
+}
+
+async function updateMutualRedistPreview() {
+    const protoA = document.getElementById("mutual-proto-a")?.value || "ospf";
+    const protoB = document.getElementById("mutual-proto-b")?.value || "eigrp";
+    const previewEl = document.getElementById("mutual-cli-preview");
+
+    if (protoA === protoB) {
+        if (previewEl) previewEl.textContent = "! ข้อผิดพลาด: Protocol Domain A และ Domain B ต้องแตกต่างกันในการทำ Redistribution";
+        return;
+    }
+
+    const subnets = document.getElementById("mutual-opt-subnets")?.checked !== false;
+    const eigrpMetric = document.getElementById("mutual-opt-eigrp-metric")?.checked ? "10000 100 255 1 1500" : null;
+    const ripMetric = document.getElementById("mutual-opt-rip-metric")?.checked ? "1" : null;
+
+    const payloadA = {
+        protocol: protoA,
+        process_id: parseInt(document.getElementById("mutual-id-a")?.value) || 1,
+        as_number: parseInt(document.getElementById("mutual-id-a")?.value) || (protoA === "eigrp" ? 100 : 65001),
+        subnets: subnets
+    };
+    if (protoA === "eigrp" && eigrpMetric) payloadA.metric = eigrpMetric;
+    if (protoA === "rip" && ripMetric) payloadA.metric = ripMetric;
+
+    const payloadB = {
+        protocol: protoB,
+        process_id: parseInt(document.getElementById("mutual-id-b")?.value) || 1,
+        as_number: parseInt(document.getElementById("mutual-id-b")?.value) || (protoB === "eigrp" ? 100 : 65001),
+        subnets: subnets
+    };
+    if (protoB === "eigrp" && eigrpMetric) payloadB.metric = eigrpMetric;
+    if (protoB === "rip" && ripMetric) payloadB.metric = ripMetric;
+
+    try {
+        const res = await fetch("/api/routing/mutual-redistribute/preview", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ proto_a: payloadA, proto_b: payloadB })
+        });
+        const data = await res.json();
+        if (previewEl) {
+            previewEl.textContent = data.preview || (data.commands ? data.commands.join("\n") : "No preview");
+        }
+    } catch (e) {
+        if (previewEl) previewEl.textContent = "! ไม่สามารถสร้าง preview ได้: " + e.message;
+    }
+}
+
+async function deployMutualRedistribution() {
+    const deviceId = document.getElementById("mutual-device-select")?.value || activeDeviceId;
+    if (!deviceId) {
+        showNotification("กรุณาเลือก Router ที่ต้องการ Deploy", "warning");
+        return;
+    }
+
+    const protoA = document.getElementById("mutual-proto-a")?.value || "ospf";
+    const protoB = document.getElementById("mutual-proto-b")?.value || "eigrp";
+
+    if (protoA === protoB) {
+        showNotification("Protocol Domain A และ Domain B ต้องแตกต่างกัน", "error");
+        return;
+    }
+
+    const subnets = document.getElementById("mutual-opt-subnets")?.checked !== false;
+    const eigrpMetric = document.getElementById("mutual-opt-eigrp-metric")?.checked ? "10000 100 255 1 1500" : null;
+    const ripMetric = document.getElementById("mutual-opt-rip-metric")?.checked ? "1" : null;
+
+    const payloadA = {
+        protocol: protoA,
+        process_id: parseInt(document.getElementById("mutual-id-a")?.value) || 1,
+        as_number: parseInt(document.getElementById("mutual-id-a")?.value) || (protoA === "eigrp" ? 100 : 65001),
+        subnets: subnets
+    };
+    if (protoA === "eigrp" && eigrpMetric) payloadA.metric = eigrpMetric;
+    if (protoA === "rip" && ripMetric) payloadA.metric = ripMetric;
+
+    const payloadB = {
+        protocol: protoB,
+        process_id: parseInt(document.getElementById("mutual-id-b")?.value) || 1,
+        as_number: parseInt(document.getElementById("mutual-id-b")?.value) || (protoB === "eigrp" ? 100 : 65001),
+        subnets: subnets
+    };
+    if (protoB === "eigrp" && eigrpMetric) payloadB.metric = eigrpMetric;
+    if (protoB === "rip" && ripMetric) payloadB.metric = ripMetric;
+
+    const progress = document.getElementById("mutual-progress");
+    const progressText = document.getElementById("mutual-progress-text");
+    const btnDeploy = document.getElementById("btn-deploy-mutual");
+
+    if (progress) progress.classList.remove("d-none");
+    if (progressText) progressText.textContent = `กำลัง Deploy Mutual Redistribution ไปยัง ${deviceId}...`;
+    if (btnDeploy) btnDeploy.disabled = true;
+
+    try {
+        const res = await fetch("/api/routing/mutual-redistribute/apply", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                device_id: deviceId,
+                proto_a: payloadA,
+                proto_b: payloadB
+            })
+        });
+        const data = await res.json();
+        if (data.success) {
+            showNotification(`Mutual Redistribution สำเร็จบน ${deviceId}! Router ต่าง Protocol สื่อสารกันได้แล้ว`, "success");
+            if (data.output) appendConsole(data.output, "output-line");
+            closeModal("mutual-redist-modal");
+        } else {
+            showNotification(data.message || "Deploy Mutual Redistribution ล้มเหลว", "error");
+            if (data.output) appendConsole(data.output, "error-line");
+        }
+    } catch (e) {
+        showNotification("Connection error: " + e.message, "error");
+    } finally {
+        if (progress) progress.classList.add("d-none");
+        if (btnDeploy) btnDeploy.disabled = false;
+    }
 }
 
 // =============================================================================
@@ -3396,6 +4543,21 @@ async function loadDrawerPhysicalPanel() {
         panel.innerHTML = html;
     } catch (e) {
         panel.innerHTML = '<div style="padding:12px;color:var(--text-dim)">Error loading ports</div>';
+    }
+}
+
+function handleDrawerCliKey(e) {
+    const input = document.getElementById("drawer-cli-input");
+    if (!input) return;
+    if (e.key === "Enter") {
+        e.preventDefault();
+        sendDrawerCli();
+        return;
+    }
+    if (e.key === "Tab") {
+        e.preventDefault();
+        handleTabAutocomplete(input);
+        return;
     }
 }
 

@@ -134,9 +134,16 @@ def eveng_topology_to_graph(topology_data: dict, nodes_data: dict, networks_data
             node_id_to_name[f"node{nid}"] = name
 
             ntype = (n.get("type") or n.get("template") or "router").lower()
-            if "switch" in ntype:
+            name_lower = str(name).lower()
+            img_lower = str(n.get("image") or "").lower()
+            inv_dev = inv_map.get(name) or inv_map.get(nid)
+            inv_type = (inv_dev.get("device_type_label") or "").lower() if inv_dev else ""
+
+            if inv_type in ("switch", "pc", "router"):
+                dtype = inv_type
+            elif "switch" in ntype or name_lower.startswith("sw") or "switch" in name_lower or "l2" in img_lower:
                 dtype = "switch"
-            elif "pc" in ntype or "host" in ntype:
+            elif "pc" in ntype or "host" in ntype or "linux" in ntype or name_lower.startswith("pc") or "linux" in name_lower or "desktop" in img_lower:
                 dtype = "pc"
             else:
                 dtype = "router"

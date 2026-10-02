@@ -60,42 +60,144 @@ def build_rip(networks: list, version: int = 2) -> list:
 
 def build_redistribute(protocol: str, source: str, **kwargs) -> list:
     """
-    protocol: rip | eigrp | ospf | bgp (ปลายทาง)
-    source: static | connected | rip | eigrp | ospf | bgp
+    สร้างคำสั่ง Cisco IOS Route Redistribution
+    protocol: rip | eigrp | ospf | bgp (protocol ปลายทางที่นำ route เข้ามา)
+    source: static | connected | rip | eigrp | ospf | bgp (ต้นทางของ route)
     """
-    protocol = protocol.lower()
-    source = source.lower()
+    protocol = protocol.lower().strip()
+    source = source.lower().strip()
     line = f"redistribute {source}"
 
+    # 1. Source parameters (OSPF Process ID, EIGRP AS, BGP AS)
     if source == "ospf" and protocol != "ospf":
         pid = kwargs.get("process_id")
-        if pid is not None:
-            line += f" {pid}"
-    if source == "eigrp" and protocol != "eigrp":
-        asn = kwargs.get("as_number")
-        if asn is not None:
-            line += f" {asn}"
+        if pid is None or str(pid).strip() == "":
+            pid = 1
+        line += f" {pid}"
+    elif source == "eigrp" and protocol != "eigrp":
+        asn = kwargs.get("as_number") or kwargs.get("as_num")
+        if asn is None or str(asn).strip() == "":
+            asn = 100
+        line += f" {asn}"
+    elif source == "bgp" and protocol != "bgp":
+        asn = kwargs.get("as_number") or kwargs.get("as_num")
+        if asn is None or str(asn).strip() == "":
+            asn = 65001
+        line += f" {asn}"
 
+    # 2. Destination protocol specific requirements
     if protocol == "eigrp":
-        bw = kwargs.get("metric_bw", 10000)
-        delay = kwargs.get("metric_delay", 100)
-        rel = kwargs.get("metric_reliability", 255)
-        load = kwargs.get("metric_load", 1)
-        mtu = kwargs.get("metric_mtu", 1500)
+        # EIGRP requires 5 metric parameters (Bandwidth, Delay, Reliability, Load, MTU)
+        raw_metric = kwargs.get("metric")
+        if raw_metric:
+            parts = str(raw_metric).strip().split()
+            if len(parts) == 5:
+                bw, delay, rel, load, mtu = parts
+            elif len(parts) == 1:
+                bw = parts[0]
+                delay = kwargs.get("metric_delay", 100)
+                rel = kwargs.get("metric_reliability", 255)
+                load = kwargs.get("metric_load", 1)
+                mtu = kwargs.get("metric_mtu", 1500)
+            else:
+                bw = kwargs.get("metric_bw", 10000)
+                delay = kwargs.get("metric_delay", 100)
+                rel = kwargs.get("metric_reliability", 255)
+                load = kwargs.get("metric_load", 1)
+                mtu = kwargs.get("metric_mtu", 1500)
+        else:
+            bw = kwargs.get("metric_bw", 10000)
+            delay = kwargs.get("metric_delay", 100)
+            rel = kwargs.get("metric_reliability", 255)
+            load = kwargs.get("metric_load", 1)
+            mtu = kwargs.get("metric_mtu", 1500)
         line += f" metric {bw} {delay} {rel} {load} {mtu}"
 
-    if protocol == "ospf":
+    elif protocol == "ospf":
+        # In OSPF, 'subnets' is necessary for classless/VLSM subnets
         if kwargs.get("subnets", True):
             line += " subnets"
-        if kwargs.get("metric") is not None:
+        if kwargs.get("metric") is not None and str(kwargs.get("metric")).strip() != "":
             line += f" metric {kwargs['metric']}"
-        if kwargs.get("metric_type") is not None:
+        if kwargs.get("metric_type") is not None and str(kwargs.get("metric_type")).strip() != "":
             line += f" metric-type {kwargs['metric_type']}"
 
-    if protocol == "rip" and kwargs.get("metric") is not None:
-        line += f" metric {kwargs['metric']}"
+    elif protocol == "rip":
+        # In RIP, seed metric is required (default infinity 16).
+        # We default to metric 1 if not specified.
+        metric = kwargs.get("metric")
+        if metric is not None and str(metric).strip() != "":
+            line += f" metric {metric}"
+        else:
+            line += " metric 1"
+
+    elif protocol == "bgp":
+        if kwargs.get("metric") is not None and str(kwargs.get("metric")).strip() != "":
+            line += f" metric {kwargs['metric']}"
 
     return [line]
+
+
+def _make_router_redist_block(target_p: str, source_p: str, target_cfg: dict, source_cfg: dict) -> list:
+    cmds = []
+    redist_args = {}
+
+    # Source identifiers
+    if source_p == "ospf":
+        redist_args["process_id"] = source_cfg.get("process_id", 1)
+    elif source_p in ("eigrp", "bgp"):
+        redist_args["as_number"] = source_cfg.get("as_number") or source_cfg.get("as_num") or (100 if source_p == "eigrp" else 65001)
+
+    # Target parameters (metric, subnets)
+    if "metric" in target_cfg and target_cfg["metric"] is not None:
+        redist_args["metric"] = target_cfg["metric"]
+    if "subnets" in target_cfg:
+        redist_args["subnets"] = target_cfg["subnets"]
+
+    if target_p == "ospf":
+        pid = target_cfg.get("process_id", 1)
+        cmds.append(f"router ospf {pid}")
+        if "subnets" not in redist_args:
+            redist_args["subnets"] = True
+        cmds.extend(build_redistribute("ospf", source_p, **redist_args))
+        cmds.append("exit")
+    elif target_p == "eigrp":
+        asn = target_cfg.get("as_number", 100)
+        cmds.append(f"router eigrp {asn}")
+        cmds.extend(build_redistribute("eigrp", source_p, **redist_args))
+        cmds.append("no auto-summary")
+        cmds.append("exit")
+    elif target_p == "rip":
+        cmds.append("router rip")
+        cmds.append("version 2")
+        cmds.extend(build_redistribute("rip", source_p, **redist_args))
+        cmds.append("no auto-summary")
+        cmds.append("exit")
+    elif target_p == "bgp":
+        asn = target_cfg.get("as_number", 65001)
+        cmds.append(f"router bgp {asn}")
+        cmds.extend(build_redistribute("bgp", source_p, **redist_args))
+        cmds.append("exit")
+    return cmds
+
+
+def build_mutual_redistribution(proto_a: dict, proto_b: dict) -> list:
+    """
+    สร้างชุดคำสั่ง Two-Way / Mutual Redistribution เชื่อม 2 routing protocol เข้าด้วยกัน
+    เพื่อให้ router ใน domain ที่ต่างกันสามารถแลกเปลี่ยน routing table และติดต่อสื่อสารกันได้สมบูรณ์
+    proto_a: {"protocol": "ospf", "process_id": 1, "subnets": True, ...}
+    proto_b: {"protocol": "eigrp", "as_number": 100, "metric": "10000 100 255 1 1500", ...}
+    """
+    p_a = (proto_a.get("protocol") or "ospf").lower().strip()
+    p_b = (proto_b.get("protocol") or "eigrp").lower().strip()
+
+    if p_a == p_b:
+        raise ValueError("การทำ Mutual Redistribution ต้องใช้ routing protocol ที่แตกต่างกัน")
+
+    cmds = []
+    cmds.extend(_make_router_redist_block(p_a, p_b, proto_a, proto_b))
+    cmds.extend(_make_router_redist_block(p_b, p_a, proto_b, proto_a))
+    return cmds
 
 
 def build_default_information_originate(protocol: str, always: bool = False) -> list:
@@ -220,7 +322,7 @@ def preview_commands(cmds: list) -> str:
     # Top-level keywords ที่ไม่ต้อง indent
     TOP_LEVEL = ("interface ", "router ", "ip route ", "ip route0",
                  "no ip route", "router rip", "router eigrp", "router ospf",
-                 "router bgp", "ip route")
+                 "router bgp", "ip route", "exit")
     lines = ["configure terminal"]
     in_block = False
     for cmd in cmds:

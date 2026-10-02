@@ -55,17 +55,30 @@
                     <div class="panel-actions" style="display:flex;align-items:center;gap:8px">
                         <span class="badge" id="node-count-badge">— Devices</span>
                         <span class="badge badge-success" id="edge-count-badge">— Links</span>
+                        <button class="btn btn-outline btn-sm" id="btn-arrange-topo" onclick="autoArrangeTopology()" title="จัดเรียงโครงสร้างอัตโนมัติสไตล์ Cisco Packet Tracer" style="padding:3px 10px;font-size:12px">
+                            <i class="fa-solid fa-sitemap"></i> จัดเรียง
+                        </button>
+                        <button class="btn btn-outline btn-sm" id="btn-toggle-labels" onclick="toggleEdgeLabelMode()" title="สลับโหมดป้ายกำกับสาย (Ports / IPs / ซ่อน)" style="padding:3px 10px;font-size:12px">
+                            <i class="fa-solid fa-tag"></i> <span id="label-mode-text">Ports</span>
+                        </button>
+                        <button class="btn btn-outline btn-sm" id="btn-toggle-physics" onclick="toggleTopologyPhysics()" title="ล็อก/ปลดล็อกตำแหน่งอุปกรณ์ (เหมือน Packet Tracer ที่วางแล้วอยู่กับที่)" style="padding:3px 8px;font-size:12px">
+                            <i class="fa-solid fa-lock" id="physics-lock-icon"></i>
+                        </button>
+                        <button class="btn btn-outline btn-sm" id="btn-fit-topo" onclick="fitTopologyView()" title="จัดกึ่งกลางมุมมอง (Fit Canvas)" style="padding:3px 8px;font-size:12px">
+                            <i class="fa-solid fa-expand"></i>
+                        </button>
                         <button class="btn btn-outline btn-sm" id="btn-refresh-topo" onclick="refreshTopology()" title="รีเฟรช Network Topology" style="padding:3px 10px;font-size:12px">
-                            <i class="fa-solid fa-arrows-rotate"></i> Refresh
+                            <i class="fa-solid fa-arrows-rotate"></i>
                         </button>
                         <button class="btn btn-outline btn-sm" id="btn-clear-topo" onclick="clearTopology()" title="ล้าง Topology แผนผังในเครื่องนี้ เพื่อสร้างผังใหม่" style="padding:3px 10px;font-size:12px">
-                            <i class="fa-solid fa-trash-can"></i> Clear Topo
+                            <i class="fa-solid fa-trash-can"></i>
                         </button>
                     </div>
                 </div>
 
-                <!-- vis-network container -->
-                <div id="topology-container" class="topology-vis-container">
+                <!-- vis-network container with PT style link inspection badge -->
+                <div id="topology-container" class="topology-vis-container" style="position:relative;">
+                    <div id="topo-link-tooltip" class="topo-link-tooltip d-none"></div>
                     <div class="topo-loading" id="topo-loading">
                         <i class="fa-solid fa-spinner fa-spin"></i>
                         <span>Discovering topology...</span>
@@ -376,14 +389,27 @@
                             </div>
 
                             <div id="redistribution-panel" class="redistribution-panel d-none">
-                                <h5><i class="fa-solid fa-shuffle"></i> Redistribution &amp; Default Route</h5>
-                                <p class="form-hint">OSPF ควรใช้ <code>subnets</code> — EIGRP ต้องระบุ metric 5 ค่า —
-                                    RIP ต้องมี metric เมื่อ redistribute จาก OSPF/EIGRP</p>
+                                <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
+                                    <h5><i class="fa-solid fa-shuffle"></i> Redistribution &amp; Default Route</h5>
+                                    <button type="button" class="btn btn-secondary btn-sm" onclick="openMutualRedistModal()" style="background: linear-gradient(135deg, #4f46e5, #06b6d4); color:#fff; border:none; padding:4px 10px; font-size:11px;">
+                                        <i class="fa-solid fa-arrows-split-up-and-left"></i> Mutual Redistribution Wizard
+                                    </button>
+                                </div>
+                                <p class="form-hint" style="margin-top:4px;">
+                                    แลกเปลี่ยนตาราง Routing ข้าม Protocol เพื่อให้อุปกรณ์ต่าง Protocol คุยกันได้ — OSPF แนะนำ <code>subnets</code> — EIGRP แนะนำ Metric 5 ค่า (10000 100 255 1 1500) — RIP ใช้ Metric 1
+                                </p>
                                 <div id="redistribute-rows"></div>
-                                <button type="button" class="btn btn-outline btn-sm mt-1"
-                                    onclick="addRedistributeRow()">
-                                    <i class="fa-solid fa-plus"></i> Add Redistribute Source
-                                </button>
+                                <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px;">
+                                    <button type="button" class="btn btn-outline btn-sm" onclick="addRedistributeRow()">
+                                        <i class="fa-solid fa-plus"></i> Add Redistribute Source
+                                    </button>
+                                    <button type="button" class="btn btn-outline btn-sm" onclick="addRedistributePreset('connected')" title="Redistribute ขา Connected ทั้งหมด">
+                                        <i class="fa-solid fa-network-wired"></i> + Connected
+                                    </button>
+                                    <button type="button" class="btn btn-outline btn-sm" onclick="addRedistributePreset('static')" title="Redistribute เส้นทาง Static">
+                                        <i class="fa-solid fa-route"></i> + Static
+                                    </button>
+                                </div>
                                 <div class="form-group mt-2">
                                     <label class="checkbox-label">
                                         <input type="checkbox" id="default-originate-enable"
@@ -933,7 +959,7 @@ router ospf 1
                 <div class="console-input-bar">
                     <span class="prompt-symbol" id="drawer-cli-prompt">#</span>
                     <input type="text" id="drawer-cli-input" class="console-input" placeholder="show ip route"
-                        onkeydown="if(event.key==='Enter'){event.preventDefault();sendDrawerCli();}">
+                        onkeydown="handleDrawerCliKey(event)">
                     <button class="btn btn-sm btn-primary" onclick="sendDrawerCli()"><i
                             class="fa-solid fa-paper-plane"></i></button>
                 </div>
@@ -1046,8 +1072,111 @@ router ospf 1
             </div>
         </div>
     </div>
+    <!-- ===== MODAL: Mutual Redistribution Wizard ===== -->
+    <div id="mutual-redist-modal" class="modal-backdrop">
+        <div class="modal-card" style="max-width:680px">
+            <div class="modal-header">
+                <div class="modal-title">
+                    <i class="fa-solid fa-arrows-split-up-and-left" style="color:var(--primary,#38bdf8)"></i>
+                    Mutual Route Redistribution Wizard
+                    <span class="badge" style="background:#10b981;color:#fff;font-size:10px;margin-left:8px;padding:2px 8px;border-radius:12px;">Cross-Protocol Routing</span>
+                </div>
+                <button class="modal-close-btn" onclick="closeModal('mutual-redist-modal')">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p class="form-hint mb-1">
+                    กำหนดค่า Two-Way Redistribution บน Border Router (ASBR) เพื่อให้ Router ในระบบต่าง Protocol (เช่น OSPF ↔ EIGRP, OSPF ↔ RIP) แลกเปลี่ยนตาราง Routing และ Ping ข้าม Protocol กันได้สมบูรณ์
+                </p>
 
-    <script src="{{ url_for('static', filename='js/app.js') }}?v=3.4"></script>
+                <div class="form-group mb-2">
+                    <label>ASBR / Border Router</label>
+                    <select id="mutual-device-select" class="form-control" onchange="updateMutualRedistPreview()">
+                    </select>
+                </div>
+
+                <div class="form-row" style="gap:12px;margin-bottom:12px;">
+                    <!-- Protocol A -->
+                    <div class="col" style="background:rgba(255,255,255,0.03);padding:12px;border-radius:8px;border:1px solid rgba(255,255,255,0.08);">
+                        <h6 style="color:#38bdf8;margin-bottom:8px;"><i class="fa-solid fa-circle-nodes"></i> Protocol Domain A</h6>
+                        <div class="form-group mb-1">
+                            <label style="font-size:11px;">Protocol</label>
+                            <select id="mutual-proto-a" class="form-control" onchange="onMutualProtoChange()">
+                                <option value="ospf" selected>OSPF</option>
+                                <option value="eigrp">EIGRP</option>
+                                <option value="rip">RIP</option>
+                                <option value="bgp">BGP</option>
+                            </select>
+                        </div>
+                        <div class="form-group mb-1" id="mutual-id-a-wrap">
+                            <label style="font-size:11px;" id="mutual-id-a-label">Process ID</label>
+                            <input type="number" id="mutual-id-a" class="form-control" value="1" oninput="updateMutualRedistPreview()">
+                        </div>
+                    </div>
+
+                    <!-- Protocol B -->
+                    <div class="col" style="background:rgba(255,255,255,0.03);padding:12px;border-radius:8px;border:1px solid rgba(255,255,255,0.08);">
+                        <h6 style="color:#a855f7;margin-bottom:8px;"><i class="fa-solid fa-circle-nodes"></i> Protocol Domain B</h6>
+                        <div class="form-group mb-1">
+                            <label style="font-size:11px;">Protocol</label>
+                            <select id="mutual-proto-b" class="form-control" onchange="onMutualProtoChange()">
+                                <option value="ospf">OSPF</option>
+                                <option value="eigrp" selected>EIGRP</option>
+                                <option value="rip">RIP</option>
+                                <option value="bgp">BGP</option>
+                            </select>
+                        </div>
+                        <div class="form-group mb-1" id="mutual-id-b-wrap">
+                            <label style="font-size:11px;" id="mutual-id-b-label">AS Number</label>
+                            <input type="number" id="mutual-id-b" class="form-control" value="100" oninput="updateMutualRedistPreview()">
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Advanced options -->
+                <div style="font-size:12px;background:rgba(0,0,0,0.2);padding:10px;border-radius:6px;margin-bottom:12px;">
+                    <div style="font-weight:600;color:var(--text-muted,#94a3b8);margin-bottom:6px;">
+                        <i class="fa-solid fa-sliders"></i> Seed Metric & Subnet Options (Auto-Calculated)
+                    </div>
+                    <div style="display:flex;gap:16px;flex-wrap:wrap;">
+                        <label class="checkbox-label" style="font-size:11px;">
+                            <input type="checkbox" id="mutual-opt-subnets" checked onchange="updateMutualRedistPreview()">
+                            OSPF: รวม <code>subnets</code> (Classless routes)
+                        </label>
+                        <label class="checkbox-label" style="font-size:11px;">
+                            <input type="checkbox" id="mutual-opt-eigrp-metric" checked onchange="updateMutualRedistPreview()">
+                            EIGRP: กำหนด Metric 5 ค่าอัตโนมัติ (10000 100 255 1 1500)
+                        </label>
+                        <label class="checkbox-label" style="font-size:11px;">
+                            <input type="checkbox" id="mutual-opt-rip-metric" checked onchange="updateMutualRedistPreview()">
+                            RIP: กำหนด Seed Hop Metric = 1
+                        </label>
+                    </div>
+                </div>
+
+                <div class="cli-preview-box" style="margin-bottom:12px;">
+                    <div class="cli-preview-title">
+                        <i class="fa-solid fa-code"></i> Cisco IOS CLI Generated Configuration
+                    </div>
+                    <pre id="mutual-cli-preview" style="max-height:160px;overflow-y:auto;"></pre>
+                </div>
+
+                <div id="mutual-progress" class="mt-2 d-none" style="font-size:12px;padding:8px 12px;border-radius:6px;background:rgba(56,189,248,0.1);color:#38bdf8;border:1px solid rgba(56,189,248,0.2);">
+                    <i class="fa-solid fa-spinner fa-spin"></i> <span id="mutual-progress-text">กำลัง Deploy คำสั่งเข้า Router...</span>
+                </div>
+
+                <div style="display:flex;gap:8px;">
+                    <button type="button" class="btn btn-primary" style="flex:2;" id="btn-deploy-mutual" onclick="deployMutualRedistribution()">
+                        <i class="fa-solid fa-play"></i> Deploy Mutual Redistribution
+                    </button>
+                    <button type="button" class="btn btn-outline" style="flex:1;" onclick="closeModal('mutual-redist-modal')">
+                        Cancel
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="{{ url_for('static', filename='js/app.js') }}?v=3.5"></script>
 </body>
 
 
