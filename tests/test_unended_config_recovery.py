@@ -110,15 +110,16 @@ class TestUnendedConfigRecovery(unittest.TestCase):
         handler.write_channel.assert_not_called()
 
     def test_send_command_auto_recovers_from_unended_config(self):
-        """send_command สามารถรันคำสั่ง show ได้แม้ Router ติดอยู่ใน config-if"""
+        """send_command สามารถรันคำสั่ง show ได้แม้ Router ติดอยู่ใน config-if โดยใช้ 'do <cmd>' ไม่เตะผู้ใช้ออก"""
         handler = MockNetmikoHandler(initial_prompt="Router(config-if)#")
         self.cm.pool["R1"] = {"handler": handler, "type": "SSH", "is_linux": False}
         
         with patch.object(self.cm, "is_connected", return_value=True):
             res = self.cm.send_command("R1", "show ip interface brief")
             self.assertTrue(res.get("success"))
-            self.assertIn("Output for show ip interface brief", res.get("output"))
-            self.assertEqual(handler.prompt, "Router#")
+            self.assertIn("do show ip interface brief", res.get("output"))
+            # Router ยังคงอยู่ที่ config-if ตามเดิม ไม่ถูกเตะออกมา
+            self.assertEqual(handler.prompt, "Router(config-if)#")
 
     def test_send_config_auto_recovers_from_unended_config(self):
         """send_config สามารถ apply ip route ได้สำเร็จแม้ Router เคยติดอยู่ใน config-if"""
@@ -166,39 +167,39 @@ class TestUnendedConfigRecovery(unittest.TestCase):
             self.assertIn("ensure", reconnect_called)
 
     def test_active_interactive_not_ejected_by_background_send_command(self):
-        """ขณะผู้ใช้พิมพ์อยู่ใน CLI Terminal (มี last_interactive ล่าสุด) background show commands จะใช้ 'do <cmd>' โดยไม่เตะผู้ใช้ออกจาก (config)#"""
+        """ขณะผู้ใช้พิมพ์อยู่ใน CLI Terminal background show commands จะใช้ 'do <cmd>' โดยไม่เตะผู้ใช้ออกจาก (config)#"""
         import time
         handler = MockNetmikoHandler(initial_prompt="Router(config)#")
         self.cm.pool["R1"] = {
             "handler": handler,
             "type": "SSH",
             "is_linux": False,
-            "last_interactive": time.time()  # เพิ่งพิมพ์คำสั่งใน CLI เมื่อสักครู่
+            "last_interactive": time.time()
         }
 
         with patch.object(self.cm, "is_connected", return_value=True):
             res = self.cm.send_command("R1", "show cdp neighbors detail")
             self.assertTrue(res.get("success"))
             self.assertIn("do show cdp neighbors detail", res.get("output"))
-            # Router ยังคงอยู่ใน config mode เหมือนเดิม ไม่ถูกสั่ง 'end' ออกมา
             self.assertEqual(handler.prompt, "Router(config)#")
 
-    def test_inactive_interactive_auto_recovers_after_timeout(self):
-        """ถ้าผู้ใช้พิมพ์ทิ้งไว้แล้วเดินหนีไป (>30 วินาที) background tasks จะ auto-recover กลับสู่ Router# ให้อัตโนมัติ"""
+    def test_idle_terminal_never_ejected_by_background_tasks(self):
+        """แม้ผู้ใช้จะทิ้งหน้าจอ Terminal ค้างไว้ใน (config-router)# นานแค่ไหน background tasks ก็จะไม่เตะผู้ใช้ออกเด็ดขาด"""
         import time
-        handler = MockNetmikoHandler(initial_prompt="Router(config)#")
+        handler = MockNetmikoHandler(initial_prompt="Router(config-router)#")
         self.cm.pool["R1"] = {
             "handler": handler,
             "type": "SSH",
             "is_linux": False,
-            "last_interactive": time.time() - 40  # พิมพ์ทิ้งไว้เมื่อ 40 วินาทีที่แล้ว
+            "last_interactive": time.time() - 3600  # ทิ้งไว้เป็นชั่วโมง
         }
 
         with patch.object(self.cm, "is_connected", return_value=True):
             res = self.cm.send_command("R1", "show ip interface brief")
             self.assertTrue(res.get("success"))
-            # Auto-recovery สั่ง 'end' กลับสู่ Router# เรียบร้อย
-            self.assertEqual(handler.prompt, "Router#")
+            self.assertIn("do show ip interface brief", res.get("output"))
+            # Router ยังคงอยู่ที่ (config-router)# 100% ไม่ถูกส่ง 'end' ออกมา
+            self.assertEqual(handler.prompt, "Router(config-router)#")
 
     def test_flask_api_routing_when_router_left_in_subconfig(self):
         """ผู้ใช้พิมพ์คาไว้ที่ Router(config-if)# แล้วมากด Apply OSPF ในหน้าเว็บ → ทำงานสำเร็จ ไม่ค้าง"""
@@ -255,7 +256,8 @@ class TestUnendedConfigRecovery(unittest.TestCase):
             self.assertEqual(res.status_code, 200)
             data = res.get_json()
             self.assertTrue(data.get("success"))
-            self.assertEqual(handler.prompt, "Router#")
+            # Router ไม่ถูกเตะออกจาก config mode
+            self.assertEqual(handler.prompt, "Router(config-if)#")
 
 
 if __name__ == "__main__":

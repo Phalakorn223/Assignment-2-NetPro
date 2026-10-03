@@ -69,7 +69,26 @@ def test_live_recovery():
     print(f" -> Success: {v_res.get('success')}")
     assert v_res.get("success")
 
-    # 5. คืนสถานะและ disconnect
+    # 5. ทดสอบจำลองผู้ใช้ค้างไว้ที่ (config-router)# แล้วทิ้งไว้ (มี background show commands รัน)
+    print("\n[TEST 6] Simulating user in (config-router)# leaving terminal idle while background tasks run...")
+    cm.send_interactive("R3", "configure terminal")
+    res_rip = cm.send_interactive("R3", "router rip")
+    print(f" -> Current prompt: {res_rip.get('prompt')}")
+    assert "config-router" in res_rip.get('prompt', '')
+
+    # Background task รัน show commands ซ้ำๆ
+    for bg_cmd in ("show ip interface brief", "show cdp neighbors detail"):
+        bg_res = cm.send_command("R3", bg_cmd)
+        assert bg_res.get("success"), f"Background command {bg_cmd} failed: {bg_res}"
+
+    # ตรวจสอบว่าผู้ใช้ยังคงอยู่ที่ (config-router)# 100% ไม่ถูกเตะออกมา!
+    chk_res = cm.send_interactive("R3", "")
+    print(f" -> Prompt after background tasks: {chk_res.get('prompt')}")
+    assert "config-router" in chk_res.get('prompt', ''), f"User was unexpectedly kicked out! Prompt is {chk_res.get('prompt')}"
+    print(" -> SUCCESS: Router stayed in (config-router)# without being kicked out!")
+
+    # 6. คืนสถานะและ disconnect
+    cm.send_interactive("R3", "end")
     cm.disconnect("R3")
     print("\n[RESULT] ALL LIVE TESTS PASSED! Problem is 100% resolved on real Router R3!")
 

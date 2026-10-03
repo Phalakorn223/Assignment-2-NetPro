@@ -515,47 +515,32 @@ class ConnectionManager:
         lock = self.get_device_lock(active_id)
         with lock:
             try:
-                # ถ้าผู้ใช้กำลังพิมพ์งานสดอยู่ใน Terminal CLI (ภายใน 30 วินาทีล่าสุด)
-                # Background tasks ไม่ควรส่ง 'end' ไปเตะผู้ใช้ออกจาก (config)#
-                # แต่ให้ใช้คำสั่ง 'do <cmd>' แทน เพื่อดึงข้อมูลได้โดยไม่รบกวน session ของผู้ใช้
-                is_actively_interactive = (time.time() - entry.get("last_interactive", 0)) < 30
                 cmd_clean = command.strip()
-                is_show_cmd = cmd_clean.lower().startswith("show ") and not cmd_clean.lower().startswith("do ")
-
-                if not is_actively_interactive:
-                    self._ensure_clean_exec_mode(active_id, entry)
+                is_exec_cmd = not cmd_clean.lower().startswith("do ")
 
                 if conn_type in ("SSH", "TELNET"):
                     is_config = False
-                    if is_actively_interactive and hasattr(handler, "check_config_mode") and callable(handler.check_config_mode):
+                    if hasattr(handler, "check_config_mode") and callable(handler.check_config_mode):
                         try:
                             is_config = handler.check_config_mode()
                         except Exception:
                             pass
 
-                    # ถ้ากำลังพิมพ์ใน CLI และอยู่ใน config mode ให้ใช้ 'do <cmd>' ทันที
-                    if is_config and is_show_cmd:
+                    # หาก Router อยู่ใน config mode (เช่น (config)#, (config-if)#, (config-router)#)
+                    # ให้เติมคำสั่ง 'do ' นำหน้าเสมอ เพื่อดึงข้อมูลได้ทันที 100% โดยเด็ดขาดที่จะไม่ส่งคำสั่ง 'end'
+                    # ไปรบกวนหรือเตะผู้ใช้ออกจาก Terminal CLI แม้จะทิ้งไว้นานแค่ไหนก็ตาม!
+                    if is_config and is_exec_cmd:
                         output = handler.send_command(f"do {cmd_clean}", use_textfsm=use_textfsm)
                     else:
                         output = handler.send_command(command, use_textfsm=use_textfsm)
 
-                    # ตรวจ IOS syntax error (เช่น อยู่ใน config mode แล้วสั่ง show ธรรมดา)
+                    # ตรวจ IOS syntax error (กรณีที่ส่งแบบปกติแล้ว IOS ฟ้อง Invalid input เพราะอยู่ใน config mode)
                     if isinstance(output, str) and re.search(r"% Invalid input detected at", output):
-                        # ลอง retry ด้วยคำสั่ง 'do ' เพื่อไม่รบกวน config mode
-                        if is_show_cmd:
-                            try:
-                                do_out = handler.send_command(f"do {cmd_clean}", use_textfsm=use_textfsm)
-                                if isinstance(do_out, str) and not re.search(r"% Invalid input detected at", do_out):
-                                    return {"success": True, "output": do_out}
-                            except Exception:
-                                pass
-
-                        # ถ้ายังไม่ได้ผล จึงเข้าสู่โหมด recovery prompt
-                        self._ensure_clean_exec_mode(active_id, entry)
+                        # ลอง retry ด้วยคำสั่ง 'do ' ทันทีเพื่อไม่เตะผู้ใช้ออกจาก config mode
                         try:
-                            retry_out = handler.send_command(command, use_textfsm=use_textfsm)
-                            if isinstance(retry_out, str) and not re.search(r"% Invalid input detected at", retry_out):
-                                return {"success": True, "output": retry_out}
+                            do_out = handler.send_command(f"do {cmd_clean}", use_textfsm=use_textfsm)
+                            if isinstance(do_out, str) and not re.search(r"% Invalid input detected at", do_out):
+                                return {"success": True, "output": do_out}
                         except Exception:
                             pass
 
