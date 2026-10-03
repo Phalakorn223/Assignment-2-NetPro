@@ -541,6 +541,7 @@
                                 <div class="cisco-titlebar-actions">
                                     <button type="button" class="cisco-btn-titlebar" onclick="openBatchScriptModal(event)" title="Paste & execute multi-line Cisco configuration script"><i class="fa-solid fa-file-code"></i> Batch Script</button>
                                     <button type="button" class="cisco-btn-titlebar" onclick="sendBreakSignal(event)" title="Send Break / Ctrl+C to device"><i class="fa-solid fa-ban"></i> Ctrl+C</button>
+                                    <button type="button" class="cisco-btn-titlebar" onclick="sendQuickCommand('end')" title="Exit configuration mode (end)"><i class="fa-solid fa-arrow-right-from-bracket"></i> End</button>
                                     <button type="button" class="cisco-btn-titlebar" onclick="reconnectActiveCli(event)" title="Reconnect Session"><i class="fa-solid fa-rotate-right"></i> Reconnect</button>
                                     <button type="button" class="cisco-btn-titlebar" onclick="clearConsole(event)" title="Clear screen"><i class="fa-solid fa-eraser"></i> Clear</button>
                                     <button type="button" class="cisco-btn-titlebar" onclick="copyConsoleOutput(event)" title="Copy terminal text"><i class="fa-regular fa-copy"></i> Copy</button>
@@ -552,10 +553,11 @@
                                 <button type="button" class="cisco-quick-pill" onclick="sendQuickCommand('show ip route')" title="Show routing table">sh ip route</button>
                                 <button type="button" class="cisco-quick-pill" onclick="sendQuickCommand('show running-config')" title="Show running-config">sh run</button>
                                 <button type="button" class="cisco-quick-pill" onclick="sendQuickCommand('configure terminal')" title="Enter configuration mode">conf t</button>
+                                <button type="button" class="cisco-quick-pill" onclick="sendQuickCommand('end')" title="Exit configuration mode to privileged EXEC (#)">end</button>
+                                <button type="button" class="cisco-quick-pill" onclick="sendQuickCommand('exit')" title="Exit current mode">exit</button>
                                 <button type="button" class="cisco-quick-pill" onclick="sendQuickCommand('write memory')" title="Save config to NVRAM">wr mem</button>
                                 <button type="button" class="cisco-quick-pill" onclick="sendQuickCommand('terminal length 0')" title="Disable pagination for continuous dump">term len 0</button>
                                 <button type="button" class="cisco-quick-pill" onclick="sendQuickCommand('show cdp neighbors detail')" title="Show CDP neighbors">sh cdp neigh</button>
-                                <button type="button" class="cisco-quick-pill" onclick="sendQuickCommand('exit')" title="Exit current mode">exit</button>
                             </div>
                             <div class="cisco-terminal-viewport" id="console-output" onclick="focusCliInput()">
                                 <div id="cli-lines"></div>

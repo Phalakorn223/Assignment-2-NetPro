@@ -173,16 +173,16 @@ class ConnectionManager:
 
     def __init__(self):
         self.pool: Dict[str, Any] = {}
-        self._device_locks: Dict[str, threading.Lock] = {}
-        self._pool_lock = threading.Lock()
+        self._device_locks: Dict[str, threading.RLock] = {}
+        self._pool_lock = threading.RLock()
 
-    def get_device_lock(self, device_id: str) -> threading.Lock:
-        """ดึง lock ประจำ device เพื่อป้องกัน race condition ชนกันระหว่าง CLI กับ Background Tasks"""
+    def get_device_lock(self, device_id: str) -> threading.RLock:
+        """ดึง reentrant lock ประจำ device เพื่อป้องกัน race condition ชนกันระหว่าง CLI กับ Background Tasks"""
         with self._pool_lock:
             dev = get_device_by_id(device_id)
             canonical_id = dev.get("id", device_id) if dev else device_id
             if canonical_id not in self._device_locks:
-                self._device_locks[canonical_id] = threading.Lock()
+                self._device_locks[canonical_id] = threading.RLock()
             return self._device_locks[canonical_id]
 
     def connect(self, device_id: str, device_params: dict, skip_ping: bool = False) -> dict:
@@ -374,11 +374,131 @@ class ConnectionManager:
                 return res.get("success", False)
         return False
 
+    def _ensure_clean_exec_mode(self, active_id: str, entry: dict) -> bool:
+        """
+        ตรวจและปรับสถานะของ Cisco Router / Switch ให้กลับสู่ Privileged EXEC Mode (#)
+        แก้ปัญหาเครื่องค้าง/เอ๋อ หรือ syntax error เมื่อมีคนพิมพ์คำสั่งค้างไว้ใน CLI/Console แล้วไม่ได้พิมพ์ 'end'
+        (เช่น ค้างที่ (config)#, (config-if)#, (config-router)#, ติดค้าง prompt [confirm] หรือ --More--)
+        """
+        if entry.get("is_linux"):
+            return True
+
+        conn_type = entry.get("type")
+        handler = entry.get("handler")
+        if not handler:
+            return False
+
+        if conn_type in ("SSH", "TELNET"):
+            try:
+                # 1. ล้าง buffer ตกค้าง
+                if hasattr(handler, "clear_buffer") and callable(handler.clear_buffer):
+                    try:
+                        handler.clear_buffer()
+                    except Exception:
+                        pass
+
+                # 2. ตรวจสอบว่าค้างใน config mode หรือไม่ (ข้ามถ้ากำลังรอป้อน password)
+                if not entry.get("is_password_pending"):
+                    is_config = False
+                    if hasattr(handler, "check_config_mode") and callable(handler.check_config_mode):
+                        try:
+                            is_config = handler.check_config_mode()
+                        except Exception:
+                            # หาก check_config_mode ขัดข้อง ให้ส่ง Ctrl+C แล้วเช็คใหม่
+                            if hasattr(handler, "write_channel") and callable(handler.write_channel):
+                                try:
+                                    handler.write_channel("\x03")
+                                    time.sleep(0.05)
+                                    if hasattr(handler, "clear_buffer"):
+                                        handler.clear_buffer()
+                                    is_config = handler.check_config_mode()
+                                except Exception:
+                                    pass
+
+                    # ถ้าพบว่าติดอยู่ใน Configuration Mode (เช่น (config)# หรือ (config-if)#) ให้สั่ง 'end' ออกมาทันที
+                    if is_config:
+                        print(f"[ConnectionManager] Auto-recovering: {active_id} was left in config mode. Exiting to EXEC mode (#) via 'end'...")
+                        if hasattr(handler, "exit_config_mode") and callable(handler.exit_config_mode):
+                            try:
+                                handler.exit_config_mode()
+                            except Exception:
+                                if hasattr(handler, "write_channel") and callable(handler.write_channel):
+                                    try:
+                                        handler.write_channel("\x03end\r\n")
+                                        time.sleep(0.1)
+                                        if hasattr(handler, "clear_buffer"):
+                                            handler.clear_buffer()
+                                    except Exception:
+                                        pass
+                        elif hasattr(handler, "write_channel") and callable(handler.write_channel):
+                            try:
+                                handler.write_channel("\x03end\r\n")
+                                time.sleep(0.1)
+                                if hasattr(handler, "clear_buffer"):
+                                    handler.clear_buffer()
+                            except Exception:
+                                pass
+
+                    # ตรวจสอบและยกระดับเป็น Enable Mode (#) ถ้าหลุดไปอยู่ที่ User Mode (>)
+                    if hasattr(handler, "check_enable_mode") and callable(handler.check_enable_mode):
+                        try:
+                            if not handler.check_enable_mode() and hasattr(handler, "enable") and callable(handler.enable):
+                                print(f"[ConnectionManager] Auto-entering enable mode (#) for {active_id}...")
+                                handler.enable()
+                        except Exception:
+                            pass
+
+                if hasattr(handler, "clear_buffer") and callable(handler.clear_buffer):
+                    try:
+                        handler.clear_buffer()
+                    except Exception:
+                        pass
+                return True
+
+            except Exception as e:
+                print(f"[ConnectionManager] _ensure_clean_exec_mode warning for {active_id}: {e}")
+                if hasattr(handler, "write_channel") and callable(handler.write_channel):
+                    try:
+                        handler.write_channel("\x03\r\n")
+                        time.sleep(0.05)
+                        if hasattr(handler, "clear_buffer"):
+                            handler.clear_buffer()
+                    except Exception:
+                        pass
+                return False
+
+        elif conn_type == "SERIAL":
+            ser = handler
+            try:
+                if hasattr(ser, "reset_input_buffer") and callable(ser.reset_input_buffer):
+                    ser.reset_input_buffer()
+                if hasattr(ser, "write") and callable(ser.write):
+                    ser.write(b"\x03\r\n")
+                    time.sleep(0.08)
+                    raw_data = ser.read_all() if hasattr(ser, "read_all") else ""
+                    raw = raw_data.decode("utf-8", errors="ignore") if isinstance(raw_data, bytes) else str(raw_data)
+                    if bool(re.search(r"\(config[^\)]*\)#", raw) or re.search(r"\)#[ \t]*$", raw)):
+                        print(f"[ConnectionManager] Serial auto-recovering: {active_id} was left in config mode. Sending 'end'...")
+                        ser.write(b"end\r\n")
+                        time.sleep(0.12)
+                        if hasattr(ser, "read_all"):
+                            ser.read_all()
+                    elif ">" in raw and "#" not in raw:
+                        ser.write(b"enable\r\n")
+                        time.sleep(0.12)
+                        if hasattr(ser, "read_all"):
+                            ser.read_all()
+                return True
+            except Exception:
+                return False
+
+        return True
+
     def send_command(self, device_id: str, command: str, use_textfsm: bool = False, retry: bool = True) -> dict:
         """
         ส่ง show command ไปยัง device ดึงข้อมูลจริง 100%
         use_textfsm=True เพื่อ parse output เป็น structured data (สำหรับ CDP/LLDP)
-        มี auto-reconnect ถ้า session หลุด
+        มี auto-reconnect ถ้า session หลุด และ auto-exit config mode ถ้ามีคนพิมพ์ค้างไว้
         """
         dev = get_device_by_id(device_id)
         target_id = dev.get("id", device_id) if dev else device_id
@@ -395,19 +515,50 @@ class ConnectionManager:
         lock = self.get_device_lock(active_id)
         with lock:
             try:
+                # ถ้าผู้ใช้กำลังพิมพ์งานสดอยู่ใน Terminal CLI (ภายใน 30 วินาทีล่าสุด)
+                # Background tasks ไม่ควรส่ง 'end' ไปเตะผู้ใช้ออกจาก (config)#
+                # แต่ให้ใช้คำสั่ง 'do <cmd>' แทน เพื่อดึงข้อมูลได้โดยไม่รบกวน session ของผู้ใช้
+                is_actively_interactive = (time.time() - entry.get("last_interactive", 0)) < 30
+                cmd_clean = command.strip()
+                is_show_cmd = cmd_clean.lower().startswith("show ") and not cmd_clean.lower().startswith("do ")
+
+                if not is_actively_interactive:
+                    self._ensure_clean_exec_mode(active_id, entry)
+
                 if conn_type in ("SSH", "TELNET"):
-                    output = handler.send_command(command, use_textfsm=use_textfsm)
+                    is_config = False
+                    if is_actively_interactive and hasattr(handler, "check_config_mode") and callable(handler.check_config_mode):
+                        try:
+                            is_config = handler.check_config_mode()
+                        except Exception:
+                            pass
+
+                    # ถ้ากำลังพิมพ์ใน CLI และอยู่ใน config mode ให้ใช้ 'do <cmd>' ทันที
+                    if is_config and is_show_cmd:
+                        output = handler.send_command(f"do {cmd_clean}", use_textfsm=use_textfsm)
+                    else:
+                        output = handler.send_command(command, use_textfsm=use_textfsm)
+
                     # ตรวจ IOS syntax error (เช่น อยู่ใน config mode แล้วสั่ง show ธรรมดา)
                     if isinstance(output, str) and re.search(r"% Invalid input detected at", output):
-                        # หากเป็นคำสั่ง show ให้ลองส่งด้วย 'do <command>' อัตโนมัติ (กรณี router ติดอยู่ใน config mode)
-                        cmd_clean = command.strip()
-                        if cmd_clean.lower().startswith("show ") and not cmd_clean.lower().startswith("do "):
+                        # ลอง retry ด้วยคำสั่ง 'do ' เพื่อไม่รบกวน config mode
+                        if is_show_cmd:
                             try:
                                 do_out = handler.send_command(f"do {cmd_clean}", use_textfsm=use_textfsm)
                                 if isinstance(do_out, str) and not re.search(r"% Invalid input detected at", do_out):
                                     return {"success": True, "output": do_out}
                             except Exception:
                                 pass
+
+                        # ถ้ายังไม่ได้ผล จึงเข้าสู่โหมด recovery prompt
+                        self._ensure_clean_exec_mode(active_id, entry)
+                        try:
+                            retry_out = handler.send_command(command, use_textfsm=use_textfsm)
+                            if isinstance(retry_out, str) and not re.search(r"% Invalid input detected at", retry_out):
+                                return {"success": True, "output": retry_out}
+                        except Exception:
+                            pass
+
                         return {
                             "success": False,
                             "output": output,
@@ -437,10 +588,10 @@ class ConnectionManager:
 
             except Exception as e:
                 err_msg = str(e).lower()
-                # ตรวจสอบว่า Socket ขาดจริงหรือไม่ (ไม่รวม ReadTimeout / Pattern not detected เพราะ channel ยังไม่ตาย)
                 is_dead_socket = any(term in err_msg for term in ("closed", "eof", "broken pipe", "connection reset", "connection refused", "not a socket"))
-                if retry and is_dead_socket:
-                    print(f"[ConnectionManager] Connection dropped for {active_id} ({e}), reconnecting...")
+                is_recoverable_timeout = any(term in err_msg for term in ("timeout", "pattern not detected", "timed-out", "readtimeout"))
+                if retry and (is_dead_socket or is_recoverable_timeout):
+                    print(f"[ConnectionManager] Connection dropped/desynced for {active_id} ({e}), reconnecting...")
                     self.disconnect(active_id)
                     if self._ensure_connection(active_id):
                         return self.send_command(active_id, command, use_textfsm=use_textfsm, retry=False)
@@ -526,6 +677,7 @@ class ConnectionManager:
         lock = self.get_device_lock(active_id)
         with lock:
             try:
+                entry["last_interactive"] = time.time()
                 cmd_str = (command or "").strip()
 
                 if conn_type in ("SSH", "TELNET"):
@@ -692,8 +844,9 @@ class ConnectionManager:
             except Exception as e:
                 err_msg = str(e).lower()
                 is_dead_socket = any(term in err_msg for term in ("closed", "eof", "broken pipe", "connection reset", "connection refused", "not a socket"))
-                if retry and is_dead_socket:
-                    print(f"[ConnectionManager] Interactive connection dropped for {active_id} ({e}), reconnecting...")
+                is_recoverable_timeout = any(term in err_msg for term in ("timeout", "pattern not detected", "timed-out", "readtimeout"))
+                if retry and (is_dead_socket or is_recoverable_timeout):
+                    print(f"[ConnectionManager] Interactive connection dropped/desynced for {active_id} ({e}), reconnecting...")
                     self.disconnect(active_id)
                     if self._ensure_connection(active_id):
                         return self.send_interactive(active_id, command, retry=False)
@@ -707,7 +860,7 @@ class ConnectionManager:
         ส่ง configuration commands ไปยัง device
         ใช้ send_config_set() สำหรับ SSH/Telnet
         ตรวจ IOS syntax error ใน output
-        มี auto-reconnect ถ้า session หลุด
+        มี auto-reconnect ถ้า session หลุด และ auto-exit config mode ก่อนรันคำสั่ง
         """
         dev = get_device_by_id(device_id)
         target_id = dev.get("id", device_id) if dev else device_id
@@ -728,6 +881,7 @@ class ConnectionManager:
         lock = self.get_device_lock(active_id)
         with lock:
             try:
+                self._ensure_clean_exec_mode(active_id, entry)
                 if conn_type in ("SSH", "TELNET"):
                     output = handler.send_config_set(commands)
                     # ตรวจ IOS syntax error
@@ -768,8 +922,9 @@ class ConnectionManager:
             except Exception as e:
                 err_msg = str(e).lower()
                 is_dead_socket = any(term in err_msg for term in ("closed", "eof", "broken pipe", "connection reset", "connection refused", "not a socket"))
-                if retry and is_dead_socket:
-                    print(f"[ConnectionManager] Connection dropped for {active_id} ({e}), reconnecting...")
+                is_recoverable_timeout = any(term in err_msg for term in ("timeout", "pattern not detected", "timed-out", "readtimeout"))
+                if retry and (is_dead_socket or is_recoverable_timeout):
+                    print(f"[ConnectionManager] Connection dropped/desynced for {active_id} ({e}), reconnecting...")
                     self.disconnect(active_id)
                     if self._ensure_connection(active_id):
                         return self.send_config(active_id, commands, retry=False)
@@ -965,6 +1120,7 @@ class ConnectionManager:
             return {"success": False, "output": "SSH setup ใช้ได้กับ SSH/Telnet session เท่านั้น"}
         conn = entry["handler"]
         try:
+            self._ensure_clean_exec_mode(device_id, entry)
             output_parts = []
             output_parts.append(conn.send_config_set([f"ip domain-name {domain_name}"]))
             conn.config_mode()

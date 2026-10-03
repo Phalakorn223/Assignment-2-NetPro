@@ -6,6 +6,7 @@ Spec v3: เพิ่ม hardware_profiles, validators, config lifecycle, interf
 
 from flask import Flask, render_template, request, jsonify, Response
 import re
+import time
 
 from connection_manager import (
     ConnectionManager, ip_is_valid, ping_check,
@@ -868,18 +869,17 @@ def cli_reconnect():
     target_id = dev.get("id", device_id) if dev else device_id
     conn_mgr.disconnect(target_id)
     conn_mgr.disconnect(device_id)
-    if dev:
-        res = conn_mgr.connect(target_id, dev, skip_ping=True)
-        if res.get("success"):
-            p_res = conn_mgr.send_interactive(target_id, "")
-            return jsonify({
-                "success": True,
-                "device_id": device_id,
-                "message": f"เชื่อมต่อกับ {device_id} สำเร็จแล้ว",
-                "prompt": p_res.get("prompt", "")
-            })
-        return jsonify({"success": False, "message": res.get("message", "Reconnect ล้มเหลว")})
-    return jsonify({"success": False, "message": f"ไม่พบ device '{device_id}'"})
+    dev_to_connect = dev or {"id": device_id, "name": device_id}
+    res = conn_mgr.connect(target_id, dev_to_connect, skip_ping=True)
+    if res.get("success"):
+        p_res = conn_mgr.send_interactive(target_id, "")
+        return jsonify({
+            "success": True,
+            "device_id": device_id,
+            "message": f"เชื่อมต่อกับ {device_id} สำเร็จแล้ว",
+            "prompt": p_res.get("prompt", "")
+        })
+    return jsonify({"success": False, "message": res.get("message", f"Reconnect {device_id} ล้มเหลว")})
 
 
 @app.route("/api/connections/keepalive", methods=["POST"])
